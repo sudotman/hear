@@ -50,7 +50,7 @@
           <p class="eyebrow">Wikipedia, minus the footnotes</p>
           <h1 id="start-title" aria-label="Articles deserve a good voice.">Articles deserve<br />a good voice.</h1>
           <p class="start-deck">
-            Clean listening with the natural voices already on your device. No account, no subscription,
+            Clean listening with a natural voice generated privately on your device. No account, no subscription,
             no citations read aloud.
           </p>
 
@@ -97,11 +97,11 @@
             <span style="--h: 28%; --d: 800ms"></span>
             <span style="--h: 52%; --d: 880ms"></span>
           </div>
-          <p>Read by your Mac,<br />edited for your ears.</p>
+          <p>Read on your device,<br />edited for your ears.</p>
         </div>
 
         <div class="start-foot">
-          <span>Runs entirely in Safari</span>
+          <span>Runs entirely on your device</span>
           <span>Voice &amp; place saved locally</span>
           <span>Made for long reads</span>
         </div>
@@ -156,6 +156,7 @@
     </main>
 
     <section class="player" id="player" aria-label="Audio controls" hidden>
+      <audio id="media-audio" preload="auto" playsinline></audio>
       <div class="player-now">
         <div class="mini-cover" id="mini-cover"><span>W</span><img id="mini-cover-image" alt="" hidden /></div>
         <div class="now-copy">
@@ -189,7 +190,7 @@
         <button class="rate-button" id="rate-button" type="button" aria-label="Change playback speed">1×</button>
         <button class="voice-button" id="voice-button" type="button">
           <span class="voice-orb" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="voice-label"><small>Voice</small><strong id="voice-name">Loading…</strong></span>
+          <span class="voice-label"><small id="voice-type">Natural voice</small><strong id="voice-name">Heart</strong></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" /></svg>
         </button>
       </div>
@@ -206,9 +207,40 @@
         </button>
       </div>
 
-      <div class="setting-row voice-select-row">
+      <div class="setting-row engine-setting-row">
+        <div class="setting-label">
+          <span>Playback engine</span>
+          <small id="engine-description">Neural audio generated privately on this device</small>
+        </div>
+        <div class="engine-options" role="group" aria-label="Playback engine">
+          <button id="natural-engine" type="button" aria-pressed="true">
+            <span>Natural</span>
+            <small>Local AI</small>
+          </button>
+          <button id="system-engine" type="button" aria-pressed="false">
+            <span>System</span>
+            <small>Instant</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="natural-voice-row">
+        <label for="natural-voice-select">
+          <span>Natural voice</span>
+          <small>Higher fidelity · English articles</small>
+        </label>
+        <select id="natural-voice-select">
+          <option value="af_heart">Heart · warm American</option>
+          <option value="af_bella">Bella · expressive American</option>
+          <option value="bf_emma">Emma · composed British</option>
+          <option value="bm_fable">Fable · narrative British</option>
+          <option value="am_michael">Michael · grounded American</option>
+        </select>
+      </div>
+
+      <div class="setting-row voice-select-row" id="system-voice-row" hidden>
         <label for="voice-select">
-          <span>Voice</span>
+          <span>System voice</span>
           <small>Voices installed on this device</small>
         </label>
         <select id="voice-select"></select>
@@ -235,7 +267,30 @@
 
       <div class="sheet-actions">
         <button id="preview-voice" type="button">Preview voice</button>
-        <p>For the most natural sound, install an Enhanced or Premium voice in System Settings → Accessibility → Spoken Content.</p>
+        <div class="voice-notes">
+          <p id="voice-note">The first use downloads a 95–165 MB open voice model, depending on your device. It stays in Safari’s local cache; article text never goes to a speech service.</p>
+          <p class="safari-voice-tip"><strong>Prefer Apple’s voice?</strong> In Safari’s Page menu, choose <em>Listen to Page</em>. This copy is already citation-free.</p>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet neural-sheet" id="neural-sheet" aria-labelledby="neural-sheet-title">
+      <div class="sheet-head">
+        <div>
+          <p class="eyebrow">One-time voice download</p>
+          <h2 id="neural-sheet-title">A real voice,<br />kept private.</h2>
+        </div>
+        <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <div class="neural-promise">
+        <div class="download-size"><strong>95–165</strong><span>MB once</span></div>
+        <p>Hearwiki will download an open neural voice and generate each passage on your iPhone or Mac. Nothing is uploaded, and the resulting audio appears in iOS Control Center like a podcast.</p>
+      </div>
+      <div class="neural-actions">
+        <button id="download-neural" type="button">Download &amp; listen</button>
+        <button type="button" data-close-dialog>Not now</button>
       </div>
     </dialog>
 
@@ -261,8 +316,9 @@
 
     <div class="loading-view" id="loading-view" hidden role="status" aria-live="polite">
       <div class="loading-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-      <p>Editing for your ears…</p>
+      <p id="loading-title">Editing for your ears…</p>
       <span id="loading-detail">Removing citations and references</span>
+      <div class="loading-progress" id="loading-progress" hidden><i></i></div>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

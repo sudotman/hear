@@ -10,5 +10,11 @@
   },
   "devDependencies": {
     "vite": "^7.0.6"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.1"
+  },
+  "overrides": {
+    "sharp": "^0.35.3"
   }
 }
