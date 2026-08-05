@@ -1,23 +1,28 @@
-# Hearwiki
+# Hear
 
-A clean, free Wikipedia listening app built for Safari. Hearwiki removes citation markers, references, tables, and page furniture, then turns the edited article into controllable audio.
+Hear is a private, browser-based listening library for books and articles. Browse public-domain editions, import a DRM-free EPUB, or open a Wikipedia article; Hear turns each work into clean, controllable narration and remembers where you stopped.
 
-## What works
+## Library and reader
 
-- Paste a Wikipedia URL or type an English article title.
-- Wikipedia language is detected from pasted links; `fr:Claude Monet` also works.
-- Play, pause, resume, seek, and jump backward or forward 15 seconds.
-- Use the local neural voice for natural English narration, or switch to any system voice installed on the device.
-- Control natural-voice playback from iPhone Control Center and the lock screen.
-- Choose among five natural voices and set playback from 0.7× to 1.5×.
-- Follow the currently narrated paragraph.
-- Return to the saved sentence after reloading an article.
-- Open an article from Wikipedia with the included Safari bookmarklet.
-- Shareable URLs use `?lang=en&title=Article` and work on static hosting.
+- Browse and search editions from [Standard Ebooks](https://standardebooks.org/) and [Project Gutenberg](https://www.gutenberg.org/).
+- Import EPUB 2 and EPUB 3 files. Hear reads the package metadata, cover, spine, navigation, chapters, lists, and table-based dramatic dialogue directly in the browser.
+- Keep opened works in **My library**, with a single **Continue listening** entry for the most recent work.
+- Navigate chapter by chapter, seek through the whole work, change speed, skip ±15 seconds, and resume from saved progress.
+- Browse the library while the compact player stays active, then return to the current work with one tap.
+- Open Wikipedia pages as listening copy without citation markers, references, tables, or navigation furniture.
+- Use Media Session metadata and a real `<audio>` element for natural-voice playback from iPhone Control Center and the lock screen.
 
-The default English voice is generated locally with the open Kokoro model. Recent Safari versions use WebGPU; devices without WebGPU use a CPU fallback. The first use downloads roughly 95–165 MB, depending on the device, and Safari caches it locally. The resulting WAV passages play through a real HTML audio element and the Media Session API, which is what makes system media controls available.
+Catalog metadata comes from each library's public catalog. Standard Ebooks works are read from its compatible EPUB editions. Project Gutenberg metadata comes from its OPDS catalog; browser-readable book text is loaded from the corresponding [GITenberg](https://www.gitenberg.org/) mirror and remains linked to the original Gutenberg edition.
 
-System voice mode uses the browser's Web Speech API and starts instantly. No article text, listening history, or voice preference is sent to an app server in either mode. Article content and lead images come directly from Wikimedia.
+## Voices
+
+Natural English narration uses [Kokoro v1.0](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX), an open-weight 82-million-parameter speech model, through `kokoro-js` and Transformers.js. Hear loads its mobile-friendly q8 edition in a Web Worker using WebAssembly. The first use downloads about 100 MB of model files, which Safari caches for later sessions.
+
+The five natural choices are voice profiles within the same model, not separate model downloads. Text is divided into passages, generated locally as WAV audio, and prefetched while the current passage plays. Worker startup, generation, and audio loading have bounded recovery paths so a suspended mobile worker can be rebuilt instead of leaving the player permanently in a preparing state.
+
+System voice mode uses the browser's Web Speech API, starts immediately, and remains the fallback for non-English works. Safari does not expose its native **Listen to Page** Siri voice to webpage JavaScript; that voice can still be used from Safari's Page menu on Hear's cleaned reader view.
+
+No imported book text, generated audio, listening history, progress, or voice preference is sent to a Hear server. Cached works use IndexedDB; preferences and progress use browser storage.
 
 ## Run locally
 
@@ -26,28 +31,28 @@ npm install
 npm run dev
 ```
 
-Create a production build with `npm run build`. The generated site is in `dist/`.
+Create a production build with `npm run build`; output is written to `dist/`.
+
+## URLs
+
+- Wikipedia: `?lang=en&title=Apollo+11`
+- Standard Ebooks: `?source=standard&book=jane-austen/pride-and-prejudice`
+- Project Gutenberg: `?source=gutenberg&book=1342`
+
+Imported EPUBs deliberately do not create shareable URLs because their contents stay in that browser.
 
 ## Publish at hear.satyam.lol
 
-The repository includes a GitHub Pages workflow ready for `hear.satyam.lol`.
+The repository includes a GitHub Pages workflow for `hear.satyam.lol`.
 
 1. Push the `main` branch to a GitHub repository.
 2. In **Settings → Pages**, choose **GitHub Actions** as the source.
-3. In the **Custom domain** field on that page, enter `hear.satyam.lol` and save it. GitHub recommends verifying `satyam.lol` first under your account's **Settings → Pages**.
-4. In the DNS manager for `satyam.lol`, create a `CNAME` record named `hear` pointing directly to `<your-github-username>.github.io` (do not add the repository name).
-5. After DNS resolves, enable **Enforce HTTPS** in the repository's Pages settings.
-
-To use a path such as `satyam.lol/hearwiki/` instead, publish this build beneath that path and keep Vite's relative base setting as-is.
-
-## Safari voice quality
-
-Safari's own **Listen to Page** Siri voice is not exposed to webpage JavaScript, so Hearwiki cannot select that exact voice for its play button. The natural engine is the high-quality, private alternative. You can still use Apple's voice on the cleaned article: open Safari's Page menu and choose **Listen to Page**. Because Hearwiki has already removed Wikipedia's citations and reference sections, Safari receives clean reading copy.
-
-In system voice mode, Hearwiki prefers Premium, Enhanced, Natural, and Siri voices when Safari exposes them. For better voices on macOS, open **System Settings → Accessibility → Spoken Content → System voice → Manage Voices** and download an Enhanced or Premium voice. Voice names and availability are controlled by macOS/iOS.
+3. Set the custom domain to `hear.satyam.lol`.
+4. Point the `hear` CNAME record to `<your-github-username>.github.io`.
+5. After DNS resolves, enable **Enforce HTTPS**.
 
 ## Content and attribution
 
-Wikipedia article links remain available in the reader. Wikipedia text is reused under the [Creative Commons Attribution-ShareAlike License](https://creativecommons.org/licenses/by-sa/4.0/); images retain the license shown on their source pages.
+Every catalog work retains a link to its source edition. Availability and public-domain status can vary by jurisdiction; the source library's terms apply. Wikipedia text is reused under the [Creative Commons Attribution-ShareAlike License](https://creativecommons.org/licenses/by-sa/4.0/), and Wikimedia images retain their source licenses.
 
-The local natural voice uses [Kokoro](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) through [kokoro-js](https://www.npmjs.com/package/kokoro-js), distributed under the Apache 2.0 license.
+Kokoro and its model weights are distributed under the Apache 2.0 license.

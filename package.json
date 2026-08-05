@@ -12,6 +12,7 @@
     "vite": "^7.0.6"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "kokoro-js": "^1.2.1"
   },
   "overrides": {

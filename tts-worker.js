@@ -3,15 +3,15 @@ let initialization = null;
 let generationQueue = Promise.resolve();
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const MODEL_OPTIONS = { dtype: "q8", device: "wasm" };
 
 async function initialize() {
   if (tts) return tts;
   if (initialization) return initialization;
 
   initialization = (async () => {
+    self.postMessage({ type: "progress", status: "starting", file: "", progress: null });
     const { KokoroTTS } = await import("kokoro-js");
-    const gpuAdapter = await globalThis.navigator?.gpu?.requestAdapter().catch(() => null);
-    const dtype = gpuAdapter ? "fp16" : "q8";
     const progress_callback = (progress) => {
       const value = Number.isFinite(progress.progress)
         ? progress.progress
@@ -26,24 +26,14 @@ async function initialize() {
       });
     };
 
-    const options = {
-      dtype,
-      device: gpuAdapter ? "webgpu" : "wasm",
+    // Safari can expose WebGPU even when its mobile memory/runtime limits make a
+    // large fp16 model unreliable. q8/WASM is smaller, broadly supported, and
+    // still runs entirely off the main thread.
+    tts = await KokoroTTS.from_pretrained(MODEL_ID, {
+      ...MODEL_OPTIONS,
       progress_callback,
-    };
-
-    try {
-      tts = await KokoroTTS.from_pretrained(MODEL_ID, options);
-    } catch (error) {
-      if (!gpuAdapter) throw error;
-      self.postMessage({ type: "progress", status: "fallback", file: "", progress: null });
-      tts = await KokoroTTS.from_pretrained(MODEL_ID, {
-        dtype,
-        device: "wasm",
-        progress_callback,
-      });
-    }
-    self.postMessage({ type: "ready" });
+    });
+    self.postMessage({ type: "ready", model: MODEL_ID, ...MODEL_OPTIONS });
     return tts;
   })().catch((error) => {
     initialization = null;
@@ -56,6 +46,7 @@ async function initialize() {
 
 async function generate({ id, text, voice }) {
   const model = await initialize();
+  self.postMessage({ type: "generating", id });
   const audio = await model.generate(text, { voice, speed: 1 });
   const buffer = audio.toWav();
   self.postMessage(
@@ -72,7 +63,7 @@ async function generate({ id, text, voice }) {
 self.addEventListener("message", (event) => {
   const message = event.data;
   if (message.type === "init") {
-    initialize();
+    initialize().catch(() => {});
     return;
   }
 

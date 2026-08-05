@@ -1,3 +1,15 @@
+import {
+  cacheWork,
+  fetchGutenbergCatalog,
+  fetchStandardCatalog,
+  fetchStandardItemFromSlug,
+  getCachedWork,
+  loadGutenbergWork,
+  loadStandardWork,
+  parseEpub,
+  removeCachedWork,
+} from "./library.js";
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -5,6 +17,29 @@ const elements = {
   siteHeader: $(".site-header"),
   startView: $("#start-view"),
   reader: $("#reader"),
+  brandLink: $("#brand-link"),
+  libraryButton: $("#library-button"),
+  importButton: $("#import-button"),
+  importInlineButton: $("#import-inline-button"),
+  epubInput: $("#epub-input"),
+  catalogSearch: $("#catalog-search"),
+  catalogQuery: $("#catalog-query"),
+  sourceSwitcher: $("#source-switcher"),
+  savedCount: $("#saved-count"),
+  catalogTopics: $("#catalog-topics"),
+  catalogEyebrow: $("#catalog-eyebrow"),
+  catalogTitle: $("#catalog-title"),
+  catalogStatus: $("#catalog-status"),
+  bookGrid: $("#book-grid"),
+  loadMore: $("#load-more"),
+  continueListening: $("#continue-listening"),
+  continueButton: $("#continue-button"),
+  continueTitle: $("#continue-title"),
+  continueAuthor: $("#continue-author"),
+  continueCover: $("#continue-cover"),
+  continueImage: $("#continue-image"),
+  continueProgress: $("#continue-progress"),
+  continueLabel: $("#continue-label"),
   openForm: $("#open-form"),
   articleQuery: $("#article-query"),
   headerSearch: $("#header-search"),
@@ -17,6 +52,9 @@ const elements = {
   sourceLink: $("#source-link"),
   articleCopy: $("#article-copy"),
   outlineNav: $("#outline-nav"),
+  outlineLabel: $("#outline-label"),
+  endLabel: $("#end-label"),
+  readingNoteText: $("#reading-note-text"),
   imageWrap: $("#article-image-wrap"),
   articleImage: $("#article-image"),
   articlePlaceholder: $("#article-placeholder"),
@@ -24,6 +62,7 @@ const elements = {
   heroPlay: $("#hero-play"),
   restartButton: $("#restart-button"),
   player: $("#player"),
+  nowPlayingButton: $("#now-playing-button"),
   mediaAudio: $("#media-audio"),
   playButton: $("#play-button"),
   backButton: $("#back-button"),
@@ -40,8 +79,13 @@ const elements = {
   voiceName: $("#voice-name"),
   voiceType: $("#voice-type"),
   voiceSheet: $("#voice-sheet"),
+  chaptersButton: $("#chapters-button"),
+  chaptersSheet: $("#chapters-sheet"),
+  chaptersSheetTitle: $("#chapters-sheet-title"),
+  chapterList: $("#chapter-list"),
   voiceSelect: $("#voice-select"),
   naturalVoiceSelect: $("#natural-voice-select"),
+  voiceTraits: $("#voice-traits"),
   naturalVoiceRow: $("#natural-voice-row"),
   systemVoiceRow: $("#system-voice-row"),
   naturalEngine: $("#natural-engine"),
@@ -71,13 +115,18 @@ const synth = window.speechSynthesis;
 const supportsSpeech = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
 const WORDS_PER_MINUTE = 185;
 const STORAGE_PREFIX = "hearwiki:";
+const LIBRARY_KEY = `${STORAGE_PREFIX}library-v2`;
+const PROGRESS_KEY = `${STORAGE_PREFIX}progress-v2`;
 const NATURAL_VOICES = {
-  af_heart: "Heart",
-  af_bella: "Bella",
-  bf_emma: "Emma",
-  bm_fable: "Fable",
-  am_michael: "Michael",
+  af_heart: { name: "Heart", note: "Warm, balanced American voice · the strongest all-round choice" },
+  af_bella: { name: "Bella", note: "Lively American voice · more expressive and animated" },
+  bf_emma: { name: "Emma", note: "Composed British voice · calm for long-form listening" },
+  bm_fable: { name: "Fable", note: "Characterful British voice · suited to storytelling" },
+  am_michael: { name: "Michael", note: "Grounded American voice · steady, lower narration" },
 };
+const NEURAL_INIT_STALL_MS = 120_000;
+const NEURAL_GENERATION_TIMEOUT_MS = 120_000;
+const AUDIO_LOAD_TIMEOUT_MS = 15_000;
 const EXCLUDED_SECTIONS = new Set([
   "see also",
   "notes",
@@ -183,6 +232,8 @@ const state = {
   neuralInitPromise: null,
   neuralInitResolve: null,
   neuralInitReject: null,
+  neuralInitTimer: null,
+  neuralShowLoading: false,
   neuralRequests: new Map(),
   neuralCache: new Map(),
   neuralRequestId: 0,
@@ -204,7 +255,347 @@ const state = {
   activeBlockId: null,
   toastTimer: null,
   isSeeking: false,
+  catalogSource: "all",
+  catalogQuery: "",
+  catalogPage: 1,
+  catalogItems: [],
+  catalogRequestId: 0,
+  chapters: [],
 };
+
+function readStoredJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function libraryEntries() {
+  const entries = readStoredJson(LIBRARY_KEY, []);
+  return Array.isArray(entries) ? entries : [];
+}
+
+function progressEntries() {
+  const entries = readStoredJson(PROGRESS_KEY, {});
+  return entries && typeof entries === "object" ? entries : {};
+}
+
+function workLibraryEntry(work) {
+  return {
+    key: work.key,
+    kind: work.kind,
+    source: work.source,
+    sourceLabel: work.sourceLabel,
+    sourceUrl: work.sourceUrl,
+    title: work.title,
+    author: work.author || (work.kind === "article" ? "Wikipedia" : "Unknown author"),
+    description: work.description,
+    image: work.image?.startsWith("data:") ? "" : work.image,
+    lang: work.lang,
+    catalogItem: work.catalogItem || null,
+    savedAt: Date.now(),
+  };
+}
+
+function rememberWork(work) {
+  const entry = workLibraryEntry(work);
+  const entries = libraryEntries().filter((item) => item.key !== work.key);
+  entries.unshift(entry);
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries.slice(0, 80)));
+  elements.savedCount.textContent = String(Math.min(80, entries.length));
+  updateContinueListening();
+}
+
+function progressFor(key) {
+  return progressEntries()[key] || null;
+}
+
+function coverColor(item) {
+  const colors = ["#4c5663", "#6f4136", "#344e49", "#6a5940", "#4d3d55", "#5b4b43", "#38505a"];
+  const seed = [...`${item.title}${item.author}`].reduce((sum, character) => sum + character.codePointAt(0), 0);
+  return colors[seed % colors.length];
+}
+
+function renderBookCard(item, { removable = false } = {}) {
+  const wrapper = document.createElement("article");
+  wrapper.className = "book-item";
+  const button = document.createElement("button");
+  button.className = "book-card";
+  button.type = "button";
+  button.setAttribute("aria-label", `Open ${item.title} by ${item.author}`);
+
+  const cover = document.createElement("span");
+  cover.className = "book-cover";
+  cover.style.setProperty("--cover-hue", coverColor(item));
+  if (item.image) {
+    const image = document.createElement("img");
+    image.src = item.image;
+    image.alt = "";
+    image.loading = "lazy";
+    image.addEventListener("load", () => cover.classList.add("has-image"), { once: true });
+    image.addEventListener("error", () => image.remove(), { once: true });
+    cover.append(image);
+  }
+  const source = document.createElement("span");
+  source.className = "book-source";
+  source.textContent = item.sourceLabel || "My library";
+  const coverTitle = document.createElement("span");
+  coverTitle.className = "book-cover-title";
+  coverTitle.textContent = item.title;
+  const mark = document.createElement("span");
+  mark.className = "book-cover-mark";
+  mark.textContent = item.title[0]?.toUpperCase() || "H";
+  cover.append(source, coverTitle, mark);
+
+  const title = document.createElement("h3");
+  title.textContent = item.title;
+  const author = document.createElement("small");
+  author.textContent = item.author || "Unknown author";
+  button.append(cover, title, author);
+
+  const progress = progressFor(item.key || item.id);
+  if (progress?.totalWords) {
+    const track = document.createElement("span");
+    track.className = "book-progress";
+    const fill = document.createElement("i");
+    fill.style.setProperty("--book-progress", `${Math.min(100, (progress.word / progress.totalWords) * 100)}%`);
+    track.append(fill);
+    button.append(track);
+  }
+  button.addEventListener("click", () => openLibraryItem(item));
+  wrapper.append(button);
+
+  if (removable) {
+    const remove = document.createElement("button");
+    remove.className = "remove-book";
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${item.title} from My library`);
+    remove.textContent = "×";
+    remove.addEventListener("click", async () => {
+      const entries = libraryEntries().filter((entry) => entry.key !== item.key);
+      localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries));
+      const progress = progressEntries();
+      delete progress[item.key];
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
+      await removeCachedWork(item.key).catch(() => {});
+      renderSavedLibrary();
+      updateContinueListening();
+      showToast(`${item.title} removed from My library`);
+    });
+    wrapper.append(remove);
+  }
+  return wrapper;
+}
+
+function renderCatalogItems(items, { append = false, removable = false } = {}) {
+  if (!append) elements.bookGrid.replaceChildren();
+  const fragment = document.createDocumentFragment();
+  items.forEach((item) => fragment.append(renderBookCard(item, { removable })));
+  elements.bookGrid.append(fragment);
+}
+
+function renderSavedLibrary() {
+  const entries = libraryEntries();
+  state.catalogItems = entries;
+  elements.savedCount.textContent = String(entries.length);
+  elements.catalogEyebrow.textContent = "Saved on this device";
+  elements.catalogTitle.textContent = "My listening library";
+  elements.catalogStatus.textContent = entries.length
+    ? `${entries.length} ${entries.length === 1 ? "work" : "works"} · progress saved locally`
+    : "Your opened books, EPUBs, and articles will appear here.";
+  renderCatalogItems(entries, { removable: true });
+  elements.loadMore.hidden = true;
+}
+
+function interleave(left, right, limit = 30) {
+  const result = [];
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length && result.length < limit; index += 1) {
+    if (left[index]) result.push(left[index]);
+    if (right[index] && result.length < limit) result.push(right[index]);
+  }
+  return result;
+}
+
+async function loadCatalog({ append = false } = {}) {
+  if (state.catalogSource === "saved") {
+    renderSavedLibrary();
+    return;
+  }
+  const requestId = ++state.catalogRequestId;
+  if (!append) {
+    state.catalogPage = 1;
+    elements.bookGrid.replaceChildren();
+  }
+  elements.catalogStatus.textContent = "Opening the shelves…";
+  elements.loadMore.hidden = true;
+  const query = state.catalogQuery.trim();
+
+  try {
+    let items;
+    if (state.catalogSource === "standard") {
+      items = await fetchStandardCatalog({ query, page: state.catalogPage, limit: 24 });
+    } else if (state.catalogSource === "gutenberg") {
+      items = await fetchGutenbergCatalog({ query, page: state.catalogPage });
+    } else {
+      const results = await Promise.allSettled([
+        fetchStandardCatalog({ query, page: state.catalogPage, limit: 15 }),
+        fetchGutenbergCatalog({ query, page: state.catalogPage }),
+      ]);
+      if (results.every((result) => result.status === "rejected")) throw results[0].reason;
+      const standard = results[0].status === "fulfilled" ? results[0].value : [];
+      const gutenberg = results[1].status === "fulfilled" ? results[1].value : [];
+      items = interleave(standard, gutenberg);
+    }
+    if (requestId !== state.catalogRequestId) return;
+    state.catalogItems = append ? [...state.catalogItems, ...items] : items;
+    renderCatalogItems(items, { append });
+    elements.catalogEyebrow.textContent = query ? "Search results" : "Open shelves";
+    elements.catalogTitle.textContent = query ? `Books for “${query}”` : "Books worth hearing";
+    elements.catalogStatus.textContent = items.length
+      ? `${append ? "More from" : "Browse"} ${state.catalogSource === "all" ? "Standard Ebooks and Project Gutenberg" : items[0]?.sourceLabel}`
+      : "No matching books were found. Try a title, author, or broader subject.";
+    elements.loadMore.hidden = items.length < 10;
+  } catch (error) {
+    if (requestId !== state.catalogRequestId) return;
+    elements.catalogStatus.textContent = error.message || "The public libraries could not be reached.";
+  }
+}
+
+function chooseCatalogSource(source) {
+  state.catalogSource = source;
+  state.catalogPage = 1;
+  $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.source === source));
+  });
+  loadCatalog();
+}
+
+function updateContinueListening() {
+  const progress = Object.values(progressEntries()).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  const entry = progress && libraryEntries().find((item) => item.key === progress.key);
+  elements.savedCount.textContent = String(libraryEntries().length);
+  if (!progress || !entry) {
+    elements.continueListening.hidden = true;
+    return;
+  }
+  elements.continueListening.hidden = false;
+  elements.continueButton.dataset.key = entry.key;
+  elements.continueTitle.textContent = entry.title;
+  elements.continueAuthor.textContent = entry.author;
+  const ratio = progress.totalWords ? Math.min(1, progress.word / progress.totalWords) : 0;
+  elements.continueProgress.style.width = `${ratio * 100}%`;
+  elements.continueLabel.textContent = `${Math.round(ratio * 100)}% listened · resume`;
+  const fallback = $("i", elements.continueCover);
+  if (entry.image) {
+    elements.continueImage.src = entry.image;
+    elements.continueImage.hidden = false;
+    fallback.hidden = true;
+  } else {
+    elements.continueImage.hidden = true;
+    fallback.hidden = false;
+    fallback.textContent = entry.title[0]?.toUpperCase() || "H";
+  }
+}
+
+function showLibraryView({ scrollTop = true } = {}) {
+  elements.reader.hidden = true;
+  elements.startView.hidden = false;
+  elements.libraryButton.hidden = true;
+  elements.importButton.hidden = false;
+  elements.shareButton.hidden = true;
+  elements.siteHeader.dataset.condensed = state.article ? "true" : "false";
+  document.body.classList.add("library-open");
+  document.title = "Hear — the written world, spoken";
+  if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
+  updateContinueListening();
+}
+
+function showReaderView({ scrollTop = true } = {}) {
+  if (!state.article) return;
+  elements.startView.hidden = true;
+  elements.reader.hidden = false;
+  elements.libraryButton.hidden = false;
+  elements.importButton.hidden = true;
+  elements.shareButton.hidden = false;
+  elements.siteHeader.dataset.condensed = "true";
+  document.body.classList.remove("library-open");
+  document.title = `${state.article.title} — Hear`;
+  if (scrollTop) window.scrollTo({ top: 0, behavior: "instant" });
+}
+
+async function openLibraryItem(item) {
+  const key = item.key || item.id;
+  const cached = await getCachedWork(key).catch(() => null);
+  if (cached) {
+    activateWork(cached);
+    return;
+  }
+  if (item.kind === "article") {
+    loadArticle(`${item.lang || "en"}:${item.title}`);
+    return;
+  }
+  if (item.source === "local") {
+    showToast("This EPUB is no longer in browser storage. Import the file again.");
+    return;
+  }
+  loadCatalogItem(item.catalogItem || item);
+}
+
+async function loadCatalogItem(item) {
+  stopSpeech("idle");
+  clearNeuralCache();
+  elements.loadingView.hidden = false;
+  elements.loadingProgress.hidden = true;
+  elements.loadingTitle.textContent = `Opening ${item.title}…`;
+  elements.loadingDetail.textContent = `Connecting to ${item.sourceLabel}`;
+  try {
+    const cached = await getCachedWork(item.id).catch(() => null);
+    let resolvedItem = item;
+    if (!cached && item.source === "standard" && !item.downloadUrl) {
+      elements.loadingDetail.textContent = "Opening the Standard Ebooks edition";
+      resolvedItem = await fetchStandardItemFromSlug(item.id.replace(/^standard:/, ""));
+    }
+    const work = cached || (resolvedItem.source === "standard"
+      ? await loadStandardWork(resolvedItem, (message) => { elements.loadingDetail.textContent = message; })
+      : await loadGutenbergWork(resolvedItem, (message) => { elements.loadingDetail.textContent = message; }));
+    if (!cached) await cacheWork(work).catch(() => {});
+    activateWork(work);
+  } catch (error) {
+    showToast(error.message || "That book could not be opened.");
+  } finally {
+    hideLoading();
+  }
+}
+
+async function importEpub(file) {
+  if (!file) return;
+  if (!/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") {
+    showToast("Choose a DRM-free EPUB file.");
+    return;
+  }
+  elements.loadingView.hidden = false;
+  elements.loadingProgress.hidden = true;
+  elements.loadingTitle.textContent = `Opening ${file.name}…`;
+  elements.loadingDetail.textContent = "Finding the book’s reading order";
+  try {
+    const key = `local:${file.name}:${file.size}:${file.lastModified}`;
+    const work = await parseEpub(await file.arrayBuffer(), {
+      key,
+      source: "local",
+      sourceLabel: "My EPUB",
+    });
+    await cacheWork(work).catch(() => {});
+    activateWork(work);
+  } catch (error) {
+    showToast(error.message || "That EPUB could not be opened.");
+  } finally {
+    elements.epubInput.value = "";
+    hideLoading();
+  }
+}
 
 function cleanText(value) {
   return value
@@ -214,6 +605,14 @@ function cleanText(value) {
     .replace(/[\t\n\r ]+/g, " ")
     .replace(/\s+([’'])\s+/g, "$1")
     .trim();
+}
+
+function conciseText(value, maxLength = 440) {
+  const text = cleanText(value || "");
+  if (text.length <= maxLength) return text;
+  const excerpt = text.slice(0, maxLength);
+  const boundary = Math.max(excerpt.lastIndexOf(". "), excerpt.lastIndexOf("; "), excerpt.lastIndexOf(" "));
+  return `${excerpt.slice(0, boundary > maxLength * 0.65 ? boundary + 1 : maxLength).trim()}…`;
 }
 
 function normalizedHeading(value) {
@@ -352,11 +751,17 @@ async function fetchArticle(title, language, allowSearch = true) {
 
   const resolvedTitle = summary?.title || title.replaceAll("_", " ");
   return {
+    key: `wikipedia:${lang}:${resolvedTitle}`,
+    kind: "article",
     lang,
     title: resolvedTitle,
+    author: "Wikipedia contributors",
     description: cleanText(summary?.description || "A clean listening edition from Wikipedia"),
     image: articleImageFromSummary(summary),
+    source: "wikipedia",
+    sourceLabel: "Wikipedia",
     sourceUrl: summary?.content_urls?.desktop?.page || `${origin}/wiki/${encodeURIComponent(resolvedTitle.replaceAll(" ", "_"))}`,
+    catalogItem: null,
     blocks,
   };
 }
@@ -539,11 +944,23 @@ function neuralSegmentIndexForChunk(chunkIndex) {
 }
 
 function renderArticle(article) {
+  elements.reader.dataset.kind = article.kind;
   elements.articleTitle.textContent = article.title;
-  elements.articleDescription.textContent = article.description;
-  elements.articleKicker.textContent = `From ${article.lang}.wikipedia.org`;
-  elements.sourceLink.href = article.sourceUrl;
+  elements.articleDescription.textContent = article.kind === "book" && article.author
+    ? `${article.author}. ${conciseText(article.description)}`
+    : article.description;
+  elements.articleKicker.textContent = article.kind === "book"
+    ? `${article.sourceLabel} · listening edition`
+    : `From ${article.lang}.wikipedia.org`;
+  elements.sourceLink.hidden = !article.sourceUrl;
+  elements.sourceLink.href = article.sourceUrl || "#";
+  elements.sourceLink.textContent = article.kind === "book" ? `Edition at ${article.sourceLabel} ↗` : "Original article ↗";
   elements.nowTitle.textContent = article.title;
+  elements.outlineLabel.textContent = article.kind === "book" ? "Chapters" : "In this article";
+  elements.endLabel.textContent = article.kind === "book" ? "End of the book." : "That’s the clean version.";
+  elements.readingNoteText.textContent = article.kind === "book"
+    ? "Footnotes, endnotes, navigation, and decorative matter have been left out of narration."
+    : "Footnotes, citation numbers, tables, and references have been removed from narration.";
 
   const count = state.chunks.at(-1)?.startWord + state.chunks.at(-1)?.wordCount || 0;
   const minutes = Math.max(1, Math.round(count / (WORDS_PER_MINUTE * state.rate)));
@@ -553,8 +970,10 @@ function renderArticle(article) {
 
   if (article.image) {
     elements.articleImage.src = article.image;
-    elements.articleImage.alt = `Lead image for ${article.title}`;
-    elements.imageCaption.textContent = `Image from ${article.lang}.wikipedia.org`;
+    elements.articleImage.alt = article.kind === "book" ? `Cover of ${article.title}` : `Lead image for ${article.title}`;
+    elements.imageCaption.textContent = article.kind === "book"
+      ? `Cover from ${article.sourceLabel}`
+      : `Image from ${article.lang}.wikipedia.org`;
     elements.imageWrap.hidden = false;
     elements.articlePlaceholder.hidden = true;
     elements.miniCoverImage.src = article.image;
@@ -590,11 +1009,57 @@ function renderArticle(article) {
   }
 
   elements.outlineNav.replaceChildren();
-  const introTarget = article.blocks.find((block) => block.type === "p" || block.type === "li");
+  const introTarget = article.kind === "article" && article.blocks.find((block) => block.type === "p" || block.type === "li");
   if (introTarget) addOutlineLink("Introduction", introTarget.id, "introduction");
   for (const block of article.blocks.filter((item) => item.type === "h2")) {
     addOutlineLink(block.text, block.id, block.sectionId);
   }
+  renderChapters(article);
+}
+
+function renderChapters(article) {
+  const seen = new Set();
+  const chapters = [];
+  for (const chunk of state.chunks) {
+    if (!chunk.sectionId || seen.has(chunk.sectionId)) continue;
+    if (article.kind === "article" && chunk.sectionId === "introduction") {
+      seen.add(chunk.sectionId);
+      chapters.push({ title: "Introduction", sectionId: chunk.sectionId, chunkIndex: state.chunks.indexOf(chunk), startWord: chunk.startWord });
+      continue;
+    }
+    const heading = article.blocks.find((block) => block.type === "h2" && block.sectionId === chunk.sectionId);
+    if (!heading) continue;
+    seen.add(chunk.sectionId);
+    chapters.push({ title: heading.text, sectionId: chunk.sectionId, chunkIndex: state.chunks.indexOf(chunk), startWord: chunk.startWord });
+  }
+  chapters.forEach((chapter, index) => {
+    const endWord = chapters[index + 1]?.startWord ?? totalWords();
+    chapter.wordCount = Math.max(1, endWord - chapter.startWord);
+  });
+  state.chapters = chapters;
+  elements.chaptersButton.hidden = chapters.length < 2;
+  elements.chaptersSheetTitle.textContent = article.kind === "book" ? "Choose a chapter." : "Choose a section.";
+  elements.chapterList.replaceChildren();
+  chapters.forEach((chapter, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.sectionId = chapter.sectionId;
+    const number = document.createElement("span");
+    number.textContent = String(index + 1).padStart(2, "0");
+    const title = document.createElement("strong");
+    title.textContent = chapter.title;
+    const duration = document.createElement("small");
+    duration.textContent = `${Math.max(1, Math.round(chapter.wordCount / (WORDS_PER_MINUTE * state.rate)))} min`;
+    button.append(number, title, duration);
+    button.addEventListener("click", () => {
+      const wasPlaying = state.playback === "playing";
+      seekToIndex(chapter.chunkIndex, wasPlaying, chapter.startWord);
+      document.getElementById(chapter.sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      elements.chaptersSheet.close();
+      if (!wasPlaying) showToast(`Ready at ${chapter.title}`);
+    });
+    elements.chapterList.append(button);
+  });
 }
 
 function addOutlineLink(label, targetId, sectionId) {
@@ -651,15 +1116,20 @@ function updateEngineUI() {
   elements.systemVoiceRow.hidden = isNeural;
   elements.voiceType.textContent = isNeural ? "Natural · on device" : "System voice";
   elements.voiceName.textContent = isNeural
-    ? NATURAL_VOICES[state.neuralVoice] || "Heart"
+    ? NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
     : state.selectedVoice?.name || "System voice";
+  elements.voiceButton.setAttribute(
+    "aria-label",
+    `Voice settings, ${isNeural ? `Natural, ${NATURAL_VOICES[state.neuralVoice]?.name || "Heart"}` : state.selectedVoice?.name || "System voice"}`,
+  );
   elements.engineDescription.textContent = naturalVoiceAvailable()
-    ? "Neural audio generated privately on this device"
-    : "Natural voice currently supports English articles";
+    ? "Kokoro 82M · generated privately on this device"
+    : "Natural voice currently supports English works";
   elements.voiceNote.textContent = isNeural
-    ? "The first use downloads a 95–165 MB open voice model, depending on your device. It stays in Safari’s local cache; article text never goes to a speech service."
-    : "System voices start instantly, but Safari may expose only its compact voices. Natural voice is the higher-quality option for English articles.";
+    ? "The first use downloads about 100 MB of model files. Safari caches them locally; the text you listen to never goes to a speech service."
+    : "System voices start instantly, but Safari may expose only its compact voices. Natural voice is the higher-quality option for English works.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
+  elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.af_heart.note;
 }
 
 function clearNeuralCache() {
@@ -684,35 +1154,93 @@ function hideLoading() {
   elements.loadingProgress.style.setProperty("--download-progress", "0%");
 }
 
-function ensureNeuralWorker({ background = false } = {}) {
-  if (state.neuralReady) return Promise.resolve();
-  if (state.neuralInitPromise) return state.neuralInitPromise;
+function clearNeuralInitTimer() {
+  window.clearTimeout(state.neuralInitTimer);
+  state.neuralInitTimer = null;
+}
 
-  state.neuralWorker = new Worker(new URL("./tts-worker.js", import.meta.url), { type: "module" });
+function resetNeuralWorker(error = new Error("The natural voice engine was reset.")) {
+  clearNeuralInitTimer();
+  const worker = state.neuralWorker;
+  state.neuralWorker = null;
+  state.neuralReady = false;
+  state.neuralShowLoading = false;
+  worker?.terminate();
+
+  const rejectInitialization = state.neuralInitReject;
+  state.neuralInitPromise = null;
+  state.neuralInitResolve = null;
+  state.neuralInitReject = null;
+  rejectInitialization?.(error);
+
+  for (const request of state.neuralRequests.values()) {
+    window.clearTimeout(request.timer);
+    request.reject(error);
+  }
+  state.neuralRequests.clear();
+  hideLoading();
+}
+
+function armNeuralInitTimer(worker) {
+  clearNeuralInitTimer();
+  state.neuralInitTimer = window.setTimeout(() => {
+    if (worker !== state.neuralWorker || state.neuralReady) return;
+    const error = new Error("The natural voice stopped responding while it was starting.");
+    error.name = "TimeoutError";
+    error.recoverable = true;
+    resetNeuralWorker(error);
+  }, NEURAL_INIT_STALL_MS);
+}
+
+function ensureNeuralWorker({ background = false } = {}) {
+  if (state.neuralReady && state.neuralWorker) return Promise.resolve();
+  if (state.neuralReady && !state.neuralWorker) state.neuralReady = false;
+  if (state.neuralInitPromise) {
+    if (!background) {
+      state.neuralShowLoading = true;
+      setNeuralLoading(null, "Finishing the private voice engine");
+    }
+    return state.neuralInitPromise;
+  }
+
+  const worker = new Worker(new URL("./tts-worker.js", import.meta.url), { type: "module" });
+  state.neuralWorker = worker;
+  state.neuralShowLoading = !background;
   state.neuralInitPromise = new Promise((resolve, reject) => {
     state.neuralInitResolve = resolve;
     state.neuralInitReject = reject;
   });
 
-  state.neuralWorker.addEventListener("message", (event) => {
+  worker.addEventListener("message", (event) => {
+    if (worker !== state.neuralWorker) return;
     const message = event.data;
     if (message.type === "progress") {
-      if (background) return;
+      armNeuralInitTimer(worker);
+      if (!state.neuralShowLoading) return;
       if (message.file?.includes("onnx") && Number.isFinite(message.progress)) {
         setNeuralLoading(message.progress, `Downloading voice model · ${Math.round(message.progress)}%`);
-      } else if (message.status === "initiate") {
+      } else if (message.status === "initiate" || message.status === "starting") {
         setNeuralLoading(null, "Preparing voice files");
       }
       return;
     }
 
     if (message.type === "ready") {
+      clearNeuralInitTimer();
       state.neuralReady = true;
       localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
-      state.neuralInitResolve?.();
+      const resolveInitialization = state.neuralInitResolve;
+      state.neuralInitPromise = null;
       state.neuralInitResolve = null;
       state.neuralInitReject = null;
+      state.neuralShowLoading = false;
+      resolveInitialization?.();
       hideLoading();
+      return;
+    }
+
+    if (message.type === "generating") {
+      if (state.playback === "buffering") elements.nowSection.textContent = "Generating on this device";
       return;
     }
 
@@ -720,6 +1248,7 @@ function ensureNeuralWorker({ background = false } = {}) {
       const request = state.neuralRequests.get(message.id);
       if (!request) return;
       state.neuralRequests.delete(message.id);
+      window.clearTimeout(request.timer);
       const url = URL.createObjectURL(new Blob([message.buffer], { type: "audio/wav" }));
       const entry = { url, duration: message.duration };
       if (request.cacheKey) state.neuralCache.set(request.cacheKey, entry);
@@ -732,33 +1261,28 @@ function ensureNeuralWorker({ background = false } = {}) {
       const request = state.neuralRequests.get(message.id);
       if (!request) return;
       state.neuralRequests.delete(message.id);
+      window.clearTimeout(request.timer);
       request.reject(new Error(message.message));
       return;
     }
 
     if (message.type === "fatal") {
       const error = new Error(message.message);
-      state.neuralInitReject?.(error);
-      state.neuralInitPromise = null;
-      state.neuralInitResolve = null;
-      state.neuralInitReject = null;
-      for (const request of state.neuralRequests.values()) request.reject(error);
-      state.neuralRequests.clear();
-      hideLoading();
+      error.recoverable = true;
+      resetNeuralWorker(error);
     }
   });
 
-  state.neuralWorker.addEventListener("error", (event) => {
+  worker.addEventListener("error", (event) => {
+    if (worker !== state.neuralWorker) return;
     const error = new Error(event.message || "The natural voice stopped unexpectedly.");
-    state.neuralInitReject?.(error);
-    state.neuralInitPromise = null;
-    state.neuralInitResolve = null;
-    state.neuralInitReject = null;
-    hideLoading();
+    error.recoverable = true;
+    resetNeuralWorker(error);
   });
 
-  if (!background) setNeuralLoading(null, "Starting the private voice engine");
-  state.neuralWorker.postMessage({ type: "init" });
+  if (state.neuralShowLoading) setNeuralLoading(null, "Starting the private voice engine");
+  armNeuralInitTimer(worker);
+  worker.postMessage({ type: "init" });
   return state.neuralInitPromise;
 }
 
@@ -778,27 +1302,43 @@ async function generateNeuralText(text, cacheKey = "") {
   const existing = [...state.neuralRequests.values()].find((request) => request.cacheKey === cacheKey && cacheKey);
   if (existing) return existing.promise;
 
-  await ensureNeuralWorker();
-  const id = ++state.neuralRequestId;
-  let resolveRequest;
-  let rejectRequest;
-  const promise = new Promise((resolve, reject) => {
-    resolveRequest = resolve;
-    rejectRequest = reject;
-  });
-  state.neuralRequests.set(id, {
-    cacheKey,
-    promise,
-    resolve: resolveRequest,
-    reject: rejectRequest,
-  });
-  state.neuralWorker.postMessage({ type: "generate", id, text, voice: state.neuralVoice });
-  return promise;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await ensureNeuralWorker();
+      const id = ++state.neuralRequestId;
+      let resolveRequest;
+      let rejectRequest;
+      const promise = new Promise((resolve, reject) => {
+        resolveRequest = resolve;
+        rejectRequest = reject;
+      });
+      const timer = window.setTimeout(() => {
+        if (!state.neuralRequests.has(id)) return;
+        const error = new Error("The natural voice took too long to generate this passage.");
+        error.name = "TimeoutError";
+        error.recoverable = true;
+        resetNeuralWorker(error);
+      }, NEURAL_GENERATION_TIMEOUT_MS);
+      state.neuralRequests.set(id, {
+        cacheKey,
+        promise,
+        resolve: resolveRequest,
+        reject: rejectRequest,
+        timer,
+      });
+      state.neuralWorker.postMessage({ type: "generate", id, text, voice: state.neuralVoice });
+      return await promise;
+    } catch (error) {
+      if (!error.recoverable || attempt > 0) throw error;
+      setNeuralLoading(null, "Restarting the private voice engine");
+    }
+  }
+  throw new Error("The natural voice could not start.");
 }
 
 function getNeuralSegment(segmentIndex) {
   const segment = state.neuralSegments[segmentIndex];
-  if (!segment) return Promise.reject(new Error("That part of the article is unavailable."));
+  if (!segment) return Promise.reject(new Error("That part of the work is unavailable."));
   const cacheKey = `${state.neuralVoice}:${segmentIndex}`;
   return generateNeuralText(segment.text, cacheKey);
 }
@@ -827,17 +1367,36 @@ function createSilentWavUrl() {
 }
 
 function unlockMediaAudio() {
-  if (state.audioUnlocked) return;
+  if (state.unlockAudioUrl) {
+    state.mediaSwitching = true;
+    elements.mediaAudio.loop = true;
+    elements.mediaAudio.muted = true;
+    elements.mediaAudio.play().then(() => {
+      state.audioUnlocked = true;
+    }).catch(() => {
+      state.audioUnlocked = false;
+    }).finally(() => {
+      state.mediaSwitching = false;
+    });
+    return;
+  }
   const silentUrl = createSilentWavUrl();
   state.unlockAudioUrl = silentUrl;
+  state.audioUnlocked = false;
+  state.mediaSwitching = true;
+  elements.mediaAudio.pause();
   elements.mediaAudio.src = silentUrl;
+  elements.mediaAudio.dataset.mode = "unlock";
   elements.mediaAudio.loop = true;
   elements.mediaAudio.muted = true;
   elements.mediaAudio.play().then(() => {
     state.audioUnlocked = true;
   }).catch(() => {
+    state.audioUnlocked = false;
     URL.revokeObjectURL(silentUrl);
     if (state.unlockAudioUrl === silentUrl) state.unlockAudioUrl = null;
+  }).finally(() => {
+    state.mediaSwitching = false;
   });
 }
 
@@ -845,6 +1404,8 @@ function releaseUnlockAudio() {
   if (!state.unlockAudioUrl) return;
   URL.revokeObjectURL(state.unlockAudioUrl);
   state.unlockAudioUrl = null;
+  state.audioUnlocked = false;
+  if (elements.mediaAudio.dataset.mode === "unlock") elements.mediaAudio.dataset.mode = "";
 }
 
 function requestNeuralAction(action) {
@@ -858,9 +1419,36 @@ function requestNeuralAction(action) {
   elements.neuralSheet.showModal();
 }
 
+function waitForAudioMetadata(audioElement) {
+  if (audioElement.readyState >= 1) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      audioElement.removeEventListener("loadedmetadata", handleLoaded);
+      audioElement.removeEventListener("error", handleError);
+    };
+    const handleLoaded = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Safari could not open the generated audio."));
+    };
+    const timer = window.setTimeout(() => {
+      cleanup();
+      const error = new Error("Safari took too long to open the generated audio.");
+      error.name = "TimeoutError";
+      reject(error);
+    }, AUDIO_LOAD_TIMEOUT_MS);
+    audioElement.addEventListener("loadedmetadata", handleLoaded, { once: true });
+    audioElement.addEventListener("error", handleError, { once: true });
+  });
+}
+
 async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   if (!naturalVoiceAvailable()) {
-    showToast("Natural voice currently supports English articles.");
+    showToast("Natural voice currently supports English works.");
     return;
   }
 
@@ -872,7 +1460,7 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   state.runId += 1;
   if (supportsSpeech) synth.cancel();
   const runId = ++state.neuralRunId;
-  if (elements.mediaAudio.dataset.mode) {
+  if (elements.mediaAudio.dataset.mode && elements.mediaAudio.dataset.mode !== "unlock") {
     state.mediaSwitching = true;
     elements.mediaAudio.pause();
     state.mediaSwitching = false;
@@ -881,7 +1469,7 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   state.currentSegmentIndex = segmentIndex;
   state.boundaryWords = 0;
   setPlaybackState("buffering");
-  elements.nowSection.textContent = "Preparing natural voice";
+  elements.nowSection.textContent = "Generating on this device";
   updateProgress(targetWord ?? segment.startWord);
 
   try {
@@ -897,12 +1485,9 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
     elements.mediaAudio.playbackRate = state.rate;
     elements.mediaAudio.dataset.mode = "article";
     elements.mediaAudio.src = audio.url;
+    const metadataReady = waitForAudioMetadata(elements.mediaAudio);
     elements.mediaAudio.load();
-
-    await new Promise((resolve) => {
-      if (elements.mediaAudio.readyState >= 1) resolve();
-      else elements.mediaAudio.addEventListener("loadedmetadata", resolve, { once: true });
-    });
+    await metadataReady;
 
     if (targetWord !== null && Number.isFinite(elements.mediaAudio.duration)) {
       const ratio = Math.min(1, Math.max(0, (targetWord - segment.startWord) / segment.wordCount));
@@ -923,7 +1508,14 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
     if (runId !== state.neuralRunId) return;
     state.mediaSwitching = false;
     setPlaybackState("paused");
-    showToast(error.name === "NotAllowedError" ? "Tap play once more to start audio." : "Natural voice failed. You can switch to System voice in settings.");
+    updateActiveBlock(state.chunks[state.currentIndex]);
+    if (error.name === "NotAllowedError") {
+      showToast("Tap play once more to start audio.");
+    } else if (error.name === "TimeoutError") {
+      showToast("Natural voice was reset after taking too long. Press play to retry, or choose System voice.");
+    } else {
+      showToast("Natural voice could not start. Press play to retry, or choose System voice.");
+    }
   }
 }
 
@@ -951,12 +1543,12 @@ function setPlaybackState(nextState) {
   state.playback = nextState;
   elements.player.dataset.state = nextState;
   const playing = nextState === "playing";
-  elements.playButton.setAttribute("aria-label", playing ? "Pause" : nextState === "buffering" ? "Preparing voice" : "Play");
+  elements.playButton.setAttribute("aria-label", playing ? "Pause" : nextState === "buffering" ? "Cancel voice preparation" : "Play");
   const heroLabel = $("span:last-child", elements.heroPlay);
   heroLabel.textContent = playing
     ? "Pause listening"
     : nextState === "buffering"
-      ? "Preparing voice…"
+      ? "Cancel preparation"
       : nextState === "paused"
         ? "Resume listening"
         : "Start listening";
@@ -1055,13 +1647,18 @@ function togglePlayback() {
   if (!state.article) return;
 
   if (state.engine === "neural") {
-    if (state.playback === "buffering") return;
+    if (state.playback === "buffering") {
+      stopNeural(false);
+      setPlaybackState("paused");
+      updateActiveBlock(state.chunks[state.currentIndex]);
+      savePosition();
+      return;
+    }
     if (state.playback === "playing") {
       pauseNeural();
       return;
     }
     if (state.playback === "paused" && elements.mediaAudio.src && state.currentAudioUrl === elements.mediaAudio.src) {
-      unlockMediaAudio();
       elements.mediaAudio.playbackRate = state.rate;
       elements.mediaAudio.play().then(() => setPlaybackState("playing")).catch(() => {
         playNeuralFromChunk(state.currentIndex, currentWordPosition());
@@ -1136,6 +1733,9 @@ function updateActiveBlock(chunk) {
     $$("a", elements.outlineNav).forEach((link) => {
       link.classList.toggle("active", link.dataset.sectionId === chunk.sectionId);
     });
+    $$("button", elements.chapterList).forEach((button) => {
+      button.classList.toggle("active", button.dataset.sectionId === chunk.sectionId);
+    });
 
     if (state.follow && block && state.playback === "playing") {
       const rect = block.getBoundingClientRect();
@@ -1179,26 +1779,30 @@ function formatTime(totalSeconds) {
 
 function savePosition() {
   if (!state.article) return;
-  localStorage.setItem(
-    `${STORAGE_PREFIX}position`,
-    JSON.stringify({
-      key: `${state.article.lang}:${state.article.title}`,
-      index: state.currentIndex,
-    }),
-  );
+  const progress = progressEntries();
+  progress[state.article.key] = {
+    key: state.article.key,
+    index: state.currentIndex,
+    word: Math.round(currentWordPosition()),
+    totalWords: totalWords(),
+    section: state.chunks[state.currentIndex]?.section || "Opening",
+    updatedAt: Date.now(),
+  };
+  localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
+  if (document.body.classList.contains("library-open")) updateContinueListening();
 }
 
 function restorePosition() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}position`));
-    const key = `${state.article.lang}:${state.article.title}`;
-    if (saved?.key === key && Number.isInteger(saved.index) && saved.index < state.chunks.length - 1) {
-      state.currentIndex = Math.max(0, saved.index);
-      setPlaybackState(state.currentIndex > 0 ? "paused" : "idle");
-      updateActiveBlock(state.chunks[state.currentIndex]);
-    }
-  } catch {
-    // Ignore a stale or manually edited preference.
+  let saved = progressFor(state.article.key);
+  if (!saved && state.article.kind === "article") {
+    const legacy = readStoredJson(`${STORAGE_PREFIX}position`, null);
+    if (legacy?.key === `${state.article.lang}:${state.article.title}`) saved = legacy;
+  }
+  if (saved && Number.isInteger(saved.index) && saved.index < state.chunks.length - 1) {
+    const targetWord = Number.isFinite(saved.word) ? saved.word : state.chunks[saved.index]?.startWord;
+    state.currentIndex = Math.max(0, chunkIndexForWord(targetWord || 0));
+    setPlaybackState(state.currentIndex > 0 ? "paused" : "idle");
+    updateActiveBlock(state.chunks[state.currentIndex]);
   }
 }
 
@@ -1284,6 +1888,7 @@ function setRate(nextRate, restartSpeech = true) {
     const count = totalWords();
     elements.durationLabel.textContent = `${Math.max(1, Math.round(count / (WORDS_PER_MINUTE * state.rate)))} min listen`;
     updateProgress();
+    renderChapters(state.article);
   }
 
   if (state.engine === "neural") {
@@ -1293,6 +1898,52 @@ function setRate(nextRate, restartSpeech = true) {
   } else if (restartSpeech && state.playback === "paused") {
     stopSpeech("paused");
   }
+}
+
+function activateWork(work) {
+  stopSpeech("idle");
+  clearNeuralCache();
+  state.article = work;
+  state.chunks = createSpeechChunks(work);
+  state.neuralSegments = createNeuralSegments(state.chunks);
+  state.engine = work.lang.toLowerCase().startsWith("en")
+    ? localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural"
+    : "system";
+  state.currentIndex = 0;
+  state.currentSegmentIndex = 0;
+  state.boundaryWords = 0;
+  state.activeBlockId = null;
+  renderArticle(work);
+  loadVoices();
+  restorePosition();
+  state.currentSegmentIndex = neuralSegmentIndexForChunk(state.currentIndex);
+  updateEngineUI();
+  updateMediaMetadata();
+  updateProgress();
+  rememberWork(work);
+
+  if (state.engine === "neural" && localStorage.getItem(`${STORAGE_PREFIX}neural-ready`) === "true") {
+    const warmNaturalVoice = () => ensureNeuralWorker({ background: true }).catch(() => {});
+    if ("requestIdleCallback" in window) window.requestIdleCallback(warmNaturalVoice, { timeout: 2500 });
+    else window.setTimeout(warmNaturalVoice, 500);
+  }
+
+  elements.player.hidden = false;
+  document.body.classList.add("player-visible");
+  elements.headerQuery.value = "";
+  showReaderView();
+
+  let url = location.pathname;
+  if (work.source === "wikipedia") {
+    url += `?${new URLSearchParams({ lang: work.lang, title: work.title })}`;
+  } else if (work.source === "standard") {
+    url += `?${new URLSearchParams({ source: "standard", book: work.key.replace(/^standard:/, "") })}`;
+  } else if (work.source === "gutenberg") {
+    url += `?${new URLSearchParams({ source: "gutenberg", book: work.key.replace(/^gutenberg:/, "") })}`;
+  }
+  history.replaceState({ work: work.key }, "", url);
+
+  if (state.currentIndex > 0) showToast(`Ready to resume ${work.title}`);
 }
 
 async function loadArticle(rawInput) {
@@ -1313,46 +1964,8 @@ async function loadArticle(rawInput) {
 
   try {
     const article = await fetchArticle(parsed.title, parsed.lang);
-    state.article = article;
-    state.chunks = createSpeechChunks(article);
-    state.neuralSegments = createNeuralSegments(state.chunks);
-    state.engine = article.lang.toLowerCase().startsWith("en")
-      ? localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural"
-      : "system";
-    state.currentIndex = 0;
-    state.currentSegmentIndex = 0;
-    state.boundaryWords = 0;
-    state.activeBlockId = null;
-    renderArticle(article);
-    loadVoices();
-    restorePosition();
-    state.currentSegmentIndex = neuralSegmentIndexForChunk(state.currentIndex);
-    updateEngineUI();
-    updateMediaMetadata();
-    updateProgress();
-
-    if (state.engine === "neural" && localStorage.getItem(`${STORAGE_PREFIX}neural-ready`) === "true") {
-      const warmNaturalVoice = () => ensureNeuralWorker({ background: true }).catch(() => {});
-      if ("requestIdleCallback" in window) window.requestIdleCallback(warmNaturalVoice, { timeout: 2500 });
-      else window.setTimeout(warmNaturalVoice, 500);
-    }
-
-    elements.startView.hidden = true;
-    elements.reader.hidden = false;
-    elements.player.hidden = false;
-    elements.shareButton.hidden = false;
-    elements.siteHeader.dataset.condensed = "true";
-    document.body.classList.add("player-visible");
-    elements.headerQuery.value = "";
-
-    const params = new URLSearchParams({ lang: article.lang, title: article.title });
-    history.replaceState({ article: article.title }, "", `${location.pathname}?${params}`);
-    document.title = `${article.title} — Hearwiki`;
-    window.scrollTo({ top: 0, behavior: "instant" });
-
-    if (state.currentIndex > 0) {
-      showToast(`Ready to resume ${article.title}`);
-    }
+    await cacheWork(article).catch(() => {});
+    activateWork(article);
   } catch (error) {
     showToast(error.message || "I couldn’t prepare that article.");
   } finally {
@@ -1383,8 +1996,8 @@ function updateMediaMetadata() {
     : [];
   navigator.mediaSession.metadata = new MediaMetadata({
     title: state.article.title,
-    artist: "Hearwiki",
-    album: "Wikipedia · clean listening edition",
+    artist: state.article.author || state.article.sourceLabel || "Hear",
+    album: `${state.article.sourceLabel || "Hear"} · listening edition`,
     artwork,
   });
 }
@@ -1415,7 +2028,7 @@ function initMediaSession() {
 
 function selectEngine(nextEngine) {
   if (nextEngine === "neural" && !naturalVoiceAvailable()) {
-    showToast("Natural voice currently supports English articles.");
+    showToast("Natural voice currently supports English works.");
     return;
   }
   if (nextEngine === state.engine) return;
@@ -1450,7 +2063,7 @@ function previewSystemVoice() {
     synth.cancel();
   }
   if (synth.paused) synth.resume();
-  const utterance = new SpeechSynthesisUtterance("A good article should sound as considered as it reads.");
+  const utterance = new SpeechSynthesisUtterance("A good book should sound as considered as it reads.");
   applyVoiceToUtterance(utterance);
   synth.speak(utterance);
 }
@@ -1463,7 +2076,7 @@ async function previewNaturalVoice() {
     elements.nowSection.textContent = "Preparing voice preview";
     try {
       const entry = await generateNeuralText(
-        "A good article should sound as considered as it reads.",
+        "A good book should sound as considered as it reads.",
         `preview:${state.neuralVoice}`,
       );
       if (runId !== state.neuralRunId) return;
@@ -1482,6 +2095,61 @@ async function previewNaturalVoice() {
     }
   });
 }
+
+elements.brandLink.addEventListener("click", (event) => {
+  event.preventDefault();
+  showLibraryView();
+  history.replaceState({}, "", location.pathname);
+});
+elements.libraryButton.addEventListener("click", () => {
+  showLibraryView();
+  history.replaceState({}, "", location.pathname);
+});
+elements.nowPlayingButton.addEventListener("click", () => showReaderView());
+elements.importButton.addEventListener("click", () => elements.epubInput.click());
+elements.importInlineButton.addEventListener("click", () => elements.epubInput.click());
+elements.epubInput.addEventListener("change", () => importEpub(elements.epubInput.files?.[0]));
+elements.chaptersButton.addEventListener("click", () => elements.chaptersSheet.showModal());
+elements.continueButton.addEventListener("click", () => {
+  const entry = libraryEntries().find((item) => item.key === elements.continueButton.dataset.key);
+  if (entry) openLibraryItem(entry);
+});
+
+elements.catalogSearch.addEventListener("submit", (event) => {
+  event.preventDefault();
+  state.catalogQuery = elements.catalogQuery.value;
+  if (state.catalogSource === "saved") state.catalogSource = "all";
+  $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.source === state.catalogSource));
+  });
+  $$('button[data-topic]', elements.catalogTopics).forEach((button) => button.setAttribute("aria-pressed", "false"));
+  loadCatalog();
+  elements.catalogTitle.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+$$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
+  button.addEventListener("click", () => chooseCatalogSource(button.dataset.source));
+});
+
+$$('button[data-topic]', elements.catalogTopics).forEach((button) => {
+  button.addEventListener("click", () => {
+    state.catalogQuery = button.dataset.topic;
+    elements.catalogQuery.value = button.dataset.topic;
+    if (state.catalogSource === "saved") state.catalogSource = "all";
+    $$('button[data-topic]', elements.catalogTopics).forEach((topic) => {
+      topic.setAttribute("aria-pressed", String(topic === button));
+    });
+    $$('button[data-source]', elements.sourceSwitcher).forEach((source) => {
+      source.setAttribute("aria-pressed", String(source.dataset.source === state.catalogSource));
+    });
+    loadCatalog();
+  });
+});
+
+elements.loadMore.addEventListener("click", () => {
+  state.catalogPage += 1;
+  loadCatalog({ append: true });
+});
 
 elements.openForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1656,7 +2324,10 @@ elements.copyBookmarklet.addEventListener("click", async () => {
 });
 
 elements.shareButton.addEventListener("click", async () => {
-  const shareData = { title: `${state.article.title} — Hearwiki`, url: location.href };
+  const shareData = {
+    title: `${state.article.title} — Hear`,
+    url: state.article.source === "local" ? location.origin + location.pathname : location.href,
+  };
   try {
     if (navigator.share) await navigator.share(shareData);
     else {
@@ -1670,7 +2341,10 @@ elements.shareButton.addEventListener("click", async () => {
 
 document.addEventListener("keydown", (event) => {
   const isTyping = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.target.isContentEditable;
-  if (isTyping || !state.article || elements.voiceSheet.open || elements.setupSheet.open || elements.neuralSheet.open) return;
+  if (
+    isTyping || !state.article || elements.voiceSheet.open || elements.setupSheet.open ||
+    elements.neuralSheet.open || elements.chaptersSheet.open
+  ) return;
   if (event.code === "Space") {
     event.preventDefault();
     togglePlayback();
@@ -1694,6 +2368,9 @@ elements.followToggle.checked = state.follow;
 setBookmarklet();
 loadVoices();
 initMediaSession();
+elements.libraryButton.hidden = true;
+updateContinueListening();
+loadCatalog();
 
 const initialParams = new URLSearchParams(location.search);
 const initialInput = initialParams.get("url") || (
@@ -1701,4 +2378,27 @@ const initialInput = initialParams.get("url") || (
     ? `${safeLanguage(initialParams.get("lang") || "en")}:${initialParams.get("title")}`
     : ""
 );
-if (initialInput) loadArticle(initialInput);
+const initialSource = initialParams.get("source");
+const initialBook = initialParams.get("book");
+if (initialInput) {
+  loadArticle(initialInput);
+} else if (initialSource === "standard" && initialBook) {
+  getCachedWork(`standard:${initialBook}`).then((cached) => {
+    if (cached) activateWork(cached);
+    else fetchStandardItemFromSlug(initialBook).then(loadCatalogItem).catch((error) => showToast(error.message));
+  });
+} else if (initialSource === "gutenberg" && /^\d+$/.test(initialBook || "")) {
+  const item = {
+    id: `gutenberg:${initialBook}`,
+    gutenbergId: initialBook,
+    source: "gutenberg",
+    sourceLabel: "Project Gutenberg",
+    title: `Project Gutenberg #${initialBook}`,
+    author: "Project Gutenberg",
+    description: "A public-domain edition from Project Gutenberg.",
+    sourceUrl: `https://www.gutenberg.org/ebooks/${initialBook}`,
+  };
+  getCachedWork(item.id).then((cached) => cached ? activateWork(cached) : loadCatalogItem(item));
+} else {
+  showLibraryView({ scrollTop: false });
+}
