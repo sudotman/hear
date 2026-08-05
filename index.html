@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="Listen to clean, citation-free Wikipedia articles with the best voice on your device."
+    />
+    <meta name="theme-color" content="#f1eee5" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>Hearwiki — Wikipedia, worth listening to</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to article</a>
+
+    <header class="site-header" data-condensed="false">
+      <a class="brand" href="./" aria-label="Hearwiki home">
+        <span class="brand-mark" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </span>
+        <span>hearwiki</span>
+      </a>
+
+      <form class="header-search" id="header-search" role="search">
+        <label class="sr-only" for="header-query">Open another Wikipedia article</label>
+        <input id="header-query" autocomplete="off" spellcheck="false" placeholder="Paste another article…" />
+        <button type="submit" aria-label="Open article">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+        </button>
+      </form>
+
+      <div class="header-actions">
+        <button class="text-button" id="setup-button" type="button" aria-label="Safari setup">
+          <span class="desktop-label" aria-hidden="true">Safari setup</span>
+          <span class="mobile-label" aria-hidden="true">Setup</span>
+        </button>
+        <button class="icon-button" id="share-button" type="button" aria-label="Share this article" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m0 0L7.5 7.5M12 3l4.5 4.5M5 12v7h14v-7" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="start-view" id="start-view" aria-labelledby="start-title">
+        <div class="start-copy">
+          <p class="eyebrow">Wikipedia, minus the footnotes</p>
+          <h1 id="start-title" aria-label="Articles deserve a good voice.">Articles deserve<br />a good voice.</h1>
+          <p class="start-deck">
+            Clean listening with the natural voices already on your device. No account, no subscription,
+            no citations read aloud.
+          </p>
+
+          <form class="open-form" id="open-form" role="search">
+            <label for="article-query">Wikipedia link or article title</label>
+            <div class="open-field">
+              <input
+                id="article-query"
+                name="article"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="en.wikipedia.org/wiki/…"
+                required
+              />
+              <button type="submit">
+                <span>Listen</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+              </button>
+            </div>
+          </form>
+
+          <div class="try-row" aria-label="Example articles">
+            <span>Try</span>
+            <button type="button" data-article="Apollo 11">Apollo 11</button>
+            <button type="button" data-article="The Great Wave off Kanagawa">The Great Wave</button>
+            <button type="button" data-article="Bengal tiger">Bengal tiger</button>
+          </div>
+        </div>
+
+        <div class="start-art" aria-hidden="true">
+          <div class="edition-note"><span>01</span> A quieter internet</div>
+          <div class="sound-sculpture">
+            <span style="--h: 22%; --d: 0ms"></span>
+            <span style="--h: 44%; --d: 80ms"></span>
+            <span style="--h: 76%; --d: 160ms"></span>
+            <span style="--h: 36%; --d: 240ms"></span>
+            <span style="--h: 92%; --d: 320ms"></span>
+            <span style="--h: 58%; --d: 400ms"></span>
+            <span style="--h: 30%; --d: 480ms"></span>
+            <span style="--h: 70%; --d: 560ms"></span>
+            <span style="--h: 48%; --d: 640ms"></span>
+            <span style="--h: 84%; --d: 720ms"></span>
+            <span style="--h: 28%; --d: 800ms"></span>
+            <span style="--h: 52%; --d: 880ms"></span>
+          </div>
+          <p>Read by your Mac,<br />edited for your ears.</p>
+        </div>
+
+        <div class="start-foot">
+          <span>Runs entirely in Safari</span>
+          <span>Voice &amp; place saved locally</span>
+          <span>Made for long reads</span>
+        </div>
+      </section>
+
+      <section class="reader" id="reader" hidden>
+        <header class="article-hero">
+          <div class="article-hero-copy">
+            <p class="article-kicker" id="article-kicker">From Wikipedia</p>
+            <h1 id="article-title"></h1>
+            <p class="article-description" id="article-description"></p>
+            <div class="article-meta" aria-label="Article listening details">
+              <span id="duration-label">— min listen</span>
+              <span id="word-count-label">— words</span>
+              <a id="source-link" href="#" target="_blank" rel="noreferrer">Original article ↗</a>
+            </div>
+            <button class="hero-play" id="hero-play" type="button">
+              <span class="hero-play-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5V7Z" /></svg>
+              </span>
+              <span>Start listening</span>
+            </button>
+          </div>
+          <figure class="article-image-wrap" id="article-image-wrap" hidden>
+            <img id="article-image" alt="" />
+            <figcaption id="image-caption">Image from Wikimedia Commons</figcaption>
+          </figure>
+          <div class="article-placeholder" id="article-placeholder" aria-hidden="true">
+            <span>W</span>
+          </div>
+        </header>
+
+        <div class="reader-layout">
+          <aside class="article-outline" aria-label="Article sections">
+            <p>In this article</p>
+            <nav id="outline-nav"></nav>
+          </aside>
+
+          <article class="article-copy" id="article-copy"></article>
+
+          <aside class="reading-note">
+            <span class="reading-note-line"></span>
+            <p>Footnotes, citation numbers, tables, and references have been removed from narration.</p>
+          </aside>
+        </div>
+
+        <footer class="article-footer">
+          <p>That’s the clean version.</p>
+          <button type="button" id="restart-button">Listen again</button>
+        </footer>
+      </section>
+    </main>
+
+    <section class="player" id="player" aria-label="Audio controls" hidden>
+      <div class="player-now">
+        <div class="mini-cover" id="mini-cover"><span>W</span><img id="mini-cover-image" alt="" hidden /></div>
+        <div class="now-copy">
+          <span id="now-section">Ready to listen</span>
+          <strong id="now-title">Hearwiki</strong>
+        </div>
+      </div>
+
+      <div class="transport">
+        <div class="transport-buttons">
+          <button class="transport-small" id="back-button" type="button" aria-label="Back 15 seconds">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8H3V4M3.7 8A9 9 0 1 1 3 15" /><text x="8" y="16">15</text></svg>
+          </button>
+          <button class="play-button" id="play-button" type="button" aria-label="Play">
+            <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5V7Z" /></svg>
+            <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10M15 7v10" /></svg>
+          </button>
+          <button class="transport-small" id="forward-button" type="button" aria-label="Forward 15 seconds">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 8h4V4m-.7 4A9 9 0 1 0 21 15" /><text x="6.8" y="16">15</text></svg>
+          </button>
+        </div>
+        <div class="timeline">
+          <span id="elapsed-time">0:00</span>
+          <label class="sr-only" for="seek-range">Article progress</label>
+          <input id="seek-range" type="range" min="0" max="1000" value="0" />
+          <span id="total-time">0:00</span>
+        </div>
+      </div>
+
+      <div class="player-options">
+        <button class="rate-button" id="rate-button" type="button" aria-label="Change playback speed">1×</button>
+        <button class="voice-button" id="voice-button" type="button">
+          <span class="voice-orb" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="voice-label"><small>Voice</small><strong id="voice-name">Loading…</strong></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" /></svg>
+        </button>
+      </div>
+    </section>
+
+    <dialog class="sheet" id="voice-sheet" aria-labelledby="voice-sheet-title">
+      <div class="sheet-head">
+        <div>
+          <p class="eyebrow">Listening preferences</p>
+          <h2 id="voice-sheet-title">Make it sound right.</h2>
+        </div>
+        <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+
+      <div class="setting-row voice-select-row">
+        <label for="voice-select">
+          <span>Voice</span>
+          <small>Voices installed on this device</small>
+        </label>
+        <select id="voice-select"></select>
+      </div>
+
+      <div class="setting-row">
+        <label for="rate-range">
+          <span>Speaking rate</span>
+          <small id="rate-description">Natural pace</small>
+        </label>
+        <div class="range-setting">
+          <input id="rate-range" type="range" min="0.7" max="1.5" step="0.05" value="1" />
+          <output id="rate-output">1×</output>
+        </div>
+      </div>
+
+      <div class="setting-row toggle-row">
+        <label for="follow-toggle">
+          <span>Follow the narration</span>
+          <small>Bring the current paragraph into view</small>
+        </label>
+        <input id="follow-toggle" class="toggle" type="checkbox" checked />
+      </div>
+
+      <div class="sheet-actions">
+        <button id="preview-voice" type="button">Preview voice</button>
+        <p>For the most natural sound, install an Enhanced or Premium voice in System Settings → Accessibility → Spoken Content.</p>
+      </div>
+    </dialog>
+
+    <dialog class="sheet setup-sheet" id="setup-sheet" aria-labelledby="setup-title">
+      <div class="sheet-head">
+        <div>
+          <p class="eyebrow">One-time setup</p>
+          <h2 id="setup-title">Send any article here.</h2>
+        </div>
+        <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <ol class="setup-steps">
+        <li><span>1</span><p>Show Safari’s Favorites Bar with <strong>⌘⇧B</strong>.</p></li>
+        <li><span>2</span><p>Drag the button below into the bar.</p></li>
+        <li><span>3</span><p>Click it from any Wikipedia article.</p></li>
+      </ol>
+      <a class="bookmarklet" id="bookmarklet-link" href="#">Listen with Hearwiki <span>↗</span></a>
+      <p class="setup-fineprint">On iPhone or iPad, bookmark this page, edit the bookmark, then replace its address with the shortcut copied below.</p>
+      <button class="copy-shortcut" id="copy-bookmarklet" type="button">Copy shortcut code</button>
+    </dialog>
+
+    <div class="loading-view" id="loading-view" hidden role="status" aria-live="polite">
+      <div class="loading-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <p>Editing for your ears…</p>
+      <span id="loading-detail">Removing citations and references</span>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
