@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hear · Kokoro WebGPU stress test</title>
+    <style>
+      :root { color: #24221d; background: #f1eee5; font: 16px/1.5 system-ui, sans-serif; }
+      body { max-width: 760px; margin: 0 auto; padding: 48px 24px; }
+      h1 { font: 600 2rem/1.1 Georgia, serif; }
+      button { padding: 12px 18px; border: 0; color: white; background: #24221d; cursor: pointer; }
+      button:disabled { opacity: .45; cursor: wait; }
+      pre { overflow: auto; padding: 18px; background: #fff; border: 1px solid #d8d2c4; }
+      .pass { color: #25663d; } .fail { color: #9b2f2f; }
+    </style>
+  </head>
+  <body>
+    <p><a href="../">← Hear</a></p>
+    <h1>Kokoro FP32 · modern WebGPU stack</h1>
+    <p>This isolated harness loads one voice and runs the same short sentence 20 consecutive times. It is not imported by the listening app.</p>
+    <button id="run" type="button">Run 20 generations</button>
+    <p id="status" role="status">Ready to test.</p>
+    <audio id="audio" controls></audio>
+    <pre id="results">No results yet.</pre>
+    <script type="module" src="./webgpu-test.js"></script>
+  </body>
+</html>

@@ -279,13 +279,21 @@
           <small id="engine-description">Kokoro 82M · generated privately on this device</small>
         </div>
         <div class="engine-options" role="group" aria-label="Playback engine">
-          <button id="natural-engine" type="button" aria-pressed="true">
+          <button id="auto-engine" type="button" aria-pressed="true">
+            <span>Auto</span>
+            <small>Best fit</small>
+          </button>
+          <button id="kokoro-engine" type="button" aria-pressed="false">
             <span>Natural</span>
-            <small>Local AI</small>
+            <small>Kokoro</small>
+          </button>
+          <button id="kitten-engine" type="button" aria-pressed="false">
+            <span>Efficient</span>
+            <small>Kitten</small>
           </button>
           <button id="system-engine" type="button" aria-pressed="false">
-            <span>System</span>
-            <small>Instant</small>
+            <span>Instant</span>
+            <small>System voice</small>
           </button>
         </div>
       </div>
@@ -309,7 +317,8 @@
 
       <details class="model-details">
         <summary>What is the natural voice?</summary>
-        <p><strong>Kokoro v1.0</strong> is an open-weight, 82-million-parameter speech model. Hear uses its mobile-friendly 8-bit edition in a background worker, so generation stays responsive and private.</p>
+        <p><strong>Auto</strong> benchmarks safe local options on this browser. It prefers Kokoro WebGPU, then efficient Kitten WASM, buffered Kokoro WASM, and finally the instant system voice.</p>
+        <p>Generated passages are stored on this device using a key that includes the text, model version, voice, speed, and numeric format.</p>
         <p>The five choices are voice profiles inside the same model—not five separate downloads. Model files are cached by Safari; the text and generated audio stay on this device.</p>
         <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX" target="_blank" rel="noreferrer">Model card and voice samples ↗</a>
       </details>

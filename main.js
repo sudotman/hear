@@ -9,6 +9,8 @@ import {
   parseEpub,
   removeCachedWork,
 } from "./library.js";
+import { KokoroWebGPU, KokoroWasm, KittenWasm } from "./tts-backends.js";
+import { createAudioCacheKey, getCachedAudio, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -88,7 +90,9 @@ const elements = {
   voiceTraits: $("#voice-traits"),
   naturalVoiceRow: $("#natural-voice-row"),
   systemVoiceRow: $("#system-voice-row"),
-  naturalEngine: $("#natural-engine"),
+  autoEngine: $("#auto-engine"),
+  kokoroEngine: $("#kokoro-engine"),
+  kittenEngine: $("#kitten-engine"),
   systemEngine: $("#system-engine"),
   engineDescription: $("#engine-description"),
   voiceNote: $("#voice-note"),
@@ -117,6 +121,7 @@ const WORDS_PER_MINUTE = 185;
 const STORAGE_PREFIX = "hearwiki:";
 const LIBRARY_KEY = `${STORAGE_PREFIX}library-v2`;
 const PROGRESS_KEY = `${STORAGE_PREFIX}progress-v2`;
+const TTS_APP_VERSION = "2026.08.06";
 const NATURAL_VOICES = {
   af_heart: { name: "Heart", note: "Warm, balanced American voice · the strongest all-round choice" },
   af_bella: { name: "Bella", note: "Lively American voice · more expressive and animated" },
@@ -225,7 +230,13 @@ const state = {
   neuralSegments: [],
   voices: [],
   selectedVoice: null,
-  engine: localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural",
+  backendPreference: localStorage.getItem(`${STORAGE_PREFIX}tts-backend`) || "auto",
+  engine: (localStorage.getItem(`${STORAGE_PREFIX}tts-backend`) || "auto") === "system" ? "system" : "neural",
+  activeBackendId: null,
+  ttsBackend: null,
+  generationEpoch: 0,
+  rtfSamples: [],
+  bufferFillPromise: null,
   neuralVoice: localStorage.getItem(`${STORAGE_PREFIX}neural-voice`) || "af_heart",
   neuralWorker: null,
   neuralReady: false,
@@ -893,7 +904,7 @@ function createSpeechChunks(article) {
   return chunks;
 }
 
-function createNeuralSegments(chunks, maxCharacters = 360) {
+function createNeuralSegments(chunks) {
   const segments = [];
   let current = null;
 
@@ -905,31 +916,70 @@ function createNeuralSegments(chunks, maxCharacters = 360) {
     current = null;
   };
 
-  chunks.forEach((chunk, chunkIndex) => {
-    const candidateLength = current ? current.text.length + chunk.text.length + 1 : chunk.text.length;
-    if (current && candidateLength > maxCharacters) commit();
-
+  const append = (text, chunk, chunkIndex, startWord) => {
+    const pieceWords = wordCount(text);
     if (!current) {
       current = {
         text: "",
         startChunk: chunkIndex,
         endChunk: chunkIndex + 1,
-        startWord: chunk.startWord,
-        endWord: chunk.startWord + chunk.wordCount,
-        wordCount: chunk.wordCount,
+        startWord,
+        endWord: startWord,
+        wordCount: 0,
         blockId: chunk.blockId,
         section: chunk.section,
         sectionId: chunk.sectionId,
       };
     }
-
-    current.text += `${current.text ? " " : ""}${chunk.text}`;
+    current.text += `${current.text ? " " : ""}${text}`;
     current.endChunk = chunkIndex + 1;
-    current.endWord = chunk.startWord + chunk.wordCount;
+    current.endWord = startWord + pieceWords;
+  };
+
+  chunks.forEach((chunk, chunkIndex) => {
+    let remaining = chunk.text.trim();
+    let remainingStartWord = chunk.startWord;
+    while (remaining) {
+      const isFirst = segments.length === 0;
+      const minCharacters = isFirst ? 80 : 200;
+      const maxCharacters = isFirst ? 120 : 350;
+      const separatorLength = current?.text ? 1 : 0;
+      const available = maxCharacters - (current?.text.length || 0) - separatorLength;
+
+      if (remaining.length <= available) {
+        append(remaining, chunk, chunkIndex, remainingStartWord);
+        remaining = "";
+        continue;
+      }
+
+      if (current?.text.length >= minCharacters || available < 24) {
+        commit();
+        continue;
+      }
+
+      let cut = remaining.lastIndexOf(" ", available);
+      if (cut < Math.max(24, available - 45)) cut = remaining.indexOf(" ", available);
+      if (cut < 0) cut = Math.min(available, remaining.length);
+      const piece = remaining.slice(0, cut).trim();
+      if (!piece) {
+        commit();
+        continue;
+      }
+      append(piece, chunk, chunkIndex, remainingStartWord);
+      remainingStartWord += wordCount(piece);
+      remaining = remaining.slice(cut).trim();
+      commit();
+    }
   });
 
   commit();
   return segments;
+}
+
+function neuralSegmentIndexForWord(targetWord) {
+  const safeWord = Math.max(0, Number(targetWord) || 0);
+  const index = state.neuralSegments.findIndex((segment) => safeWord < segment.endWord);
+  return index < 0 ? Math.max(0, state.neuralSegments.length - 1) : index;
 }
 
 function neuralSegmentIndexForChunk(chunkIndex) {
@@ -1107,32 +1157,47 @@ function naturalVoiceAvailable() {
 }
 
 function updateEngineUI() {
-  if (!naturalVoiceAvailable() && state.engine === "neural") state.engine = "system";
+  if (!naturalVoiceAvailable() && state.engine === "neural") {
+    state.engine = "system";
+    state.backendPreference = "system";
+  }
   const isNeural = state.engine === "neural";
-  elements.naturalEngine.setAttribute("aria-pressed", String(isNeural));
-  elements.systemEngine.setAttribute("aria-pressed", String(!isNeural));
-  elements.naturalEngine.disabled = !naturalVoiceAvailable();
-  elements.naturalVoiceRow.hidden = !isNeural;
+  for (const [choice, element] of [["auto", elements.autoEngine], ["kokoro", elements.kokoroEngine], ["kitten", elements.kittenEngine], ["system", elements.systemEngine]]) {
+    element.setAttribute("aria-pressed", String(state.backendPreference === choice));
+    element.disabled = choice !== "system" && !naturalVoiceAvailable();
+  }
+  elements.naturalVoiceRow.hidden = !isNeural || state.backendPreference === "kitten" || state.activeBackendId === "kitten-wasm";
   elements.systemVoiceRow.hidden = isNeural;
-  elements.voiceType.textContent = isNeural ? "Natural · on device" : "System voice";
+  const backendLabel = state.activeBackendId === "kitten-wasm"
+    ? "Efficient · on device"
+    : state.backendPreference === "auto" && !state.activeBackendId
+      ? "Auto · on device"
+      : "Natural · on device";
+  elements.voiceType.textContent = isNeural ? backendLabel : "Instant · system";
   elements.voiceName.textContent = isNeural
-    ? NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
+    ? state.activeBackendId === "kitten-wasm" ? "Bella" : NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
     : state.selectedVoice?.name || "System voice";
   elements.voiceButton.setAttribute(
     "aria-label",
-    `Voice settings, ${isNeural ? `Natural, ${NATURAL_VOICES[state.neuralVoice]?.name || "Heart"}` : state.selectedVoice?.name || "System voice"}`,
+    `Voice settings, ${isNeural ? `${backendLabel}, ${elements.voiceName.textContent}` : state.selectedVoice?.name || "System voice"}`,
   );
   elements.engineDescription.textContent = naturalVoiceAvailable()
-    ? "Kokoro 82M · generated privately on this device"
+    ? state.backendPreference === "auto"
+      ? "Benchmarked privately · WebGPU, WASM, or system fallback"
+      : state.backendPreference === "kitten"
+        ? "Kitten Nano 15M · efficient WASM"
+        : state.backendPreference === "kokoro"
+          ? "Kokoro 82M · safe WebGPU with WASM fallback"
+          : "Starts instantly with an installed voice"
     : "Natural voice currently supports English works";
   elements.voiceNote.textContent = isNeural
-    ? "The first use downloads about 100 MB of model files. Safari caches them locally; the text you listen to never goes to a speech service."
+    ? "The first benchmark may download a local model. Measurements and generated passages stay on this device; text is never sent to a speech service."
     : "System voices start instantly, but Safari may expose only its compact voices. Natural voice is the higher-quality option for English works.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
   elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.af_heart.note;
 }
 
-function clearNeuralCache() {
+function legacyClearNeuralCache() {
   for (const entry of state.neuralCache.values()) URL.revokeObjectURL(entry.url);
   state.neuralCache.clear();
   state.currentAudioUrl = null;
@@ -1159,7 +1224,7 @@ function clearNeuralInitTimer() {
   state.neuralInitTimer = null;
 }
 
-function resetNeuralWorker(error = new Error("The natural voice engine was reset.")) {
+function legacyResetNeuralWorker(error = new Error("The natural voice engine was reset.")) {
   clearNeuralInitTimer();
   const worker = state.neuralWorker;
   state.neuralWorker = null;
@@ -1192,7 +1257,7 @@ function armNeuralInitTimer(worker) {
   }, NEURAL_INIT_STALL_MS);
 }
 
-function ensureNeuralWorker({ background = false } = {}) {
+function legacyEnsureNeuralWorker({ background = false } = {}) {
   if (state.neuralReady && state.neuralWorker) return Promise.resolve();
   if (state.neuralReady && !state.neuralWorker) state.neuralReady = false;
   if (state.neuralInitPromise) {
@@ -1286,7 +1351,7 @@ function ensureNeuralWorker({ background = false } = {}) {
   return state.neuralInitPromise;
 }
 
-function trimNeuralCache() {
+function legacyTrimNeuralCache() {
   if (state.neuralCache.size <= 8) return;
   for (const [key, entry] of state.neuralCache) {
     const segmentNumber = Number(key.split(":").at(-1));
@@ -1297,7 +1362,7 @@ function trimNeuralCache() {
   }
 }
 
-async function generateNeuralText(text, cacheKey = "") {
+async function legacyGenerateNeuralText(text, cacheKey = "") {
   if (cacheKey && state.neuralCache.has(cacheKey)) return state.neuralCache.get(cacheKey);
   const existing = [...state.neuralRequests.values()].find((request) => request.cacheKey === cacheKey && cacheKey);
   if (existing) return existing.promise;
@@ -1336,11 +1401,270 @@ async function generateNeuralText(text, cacheKey = "") {
   throw new Error("The natural voice could not start.");
 }
 
-function getNeuralSegment(segmentIndex) {
+function legacyGetNeuralSegment(segmentIndex) {
   const segment = state.neuralSegments[segmentIndex];
   if (!segment) return Promise.reject(new Error("That part of the work is unavailable."));
   const cacheKey = `${state.neuralVoice}:${segmentIndex}`;
   return generateNeuralText(segment.text, cacheKey);
+}
+
+function ttsCallbacks() {
+  return {
+    onProgress(message) {
+      if (message.file?.includes("onnx") && Number.isFinite(message.progress)) {
+        setNeuralLoading(message.progress, `Downloading local voice model · ${Math.round(message.progress)}%`);
+      } else {
+        setNeuralLoading(null, "Preparing local voice files");
+      }
+    },
+    onReady(message) {
+      state.neuralReady = true;
+      localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
+      console.info("[Hear TTS] runtime", {
+        crossOriginIsolated: message.crossOriginIsolated,
+        sharedArrayBuffer: message.sharedArrayBuffer,
+        cores: message.cores,
+        backend: message.backend,
+      });
+      hideLoading();
+    },
+    onGenerating() {
+      if (state.playback === "buffering") elements.nowSection.textContent = "Generating on this device";
+    },
+    onMetric(metric) {
+      state.rtfSamples.push(metric.rtf);
+      state.rtfSamples = state.rtfSamples.filter(Number.isFinite).slice(-8);
+      window.__hearwikiTtsMetrics ||= [];
+      window.__hearwikiTtsMetrics.push(metric);
+      window.__hearwikiTtsMetrics = window.__hearwikiTtsMetrics.slice(-100);
+      console.info("[Hear TTS] generation", JSON.stringify(metric));
+    },
+    onFatal(error) {
+      state.neuralReady = false;
+      console.error("[Hear TTS] backend failure", error);
+      hideLoading();
+    },
+  };
+}
+
+function webGpuProbeKey() {
+  const identity = `${navigator.userAgent}|${navigator.platform}|${TTS_APP_VERSION}`;
+  let hash = 2166136261;
+  for (const character of identity) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return `${STORAGE_PREFIX}webgpu-probe:${(hash >>> 0).toString(16)}`;
+}
+
+function markInterruptedWebGpuProbe() {
+  const key = webGpuProbeKey();
+  if (localStorage.getItem(`${key}:pending`) === "true" && !localStorage.getItem(`${key}:result`)) {
+    localStorage.setItem(`${key}:result`, JSON.stringify({ ok: false, reason: "interrupted", version: TTS_APP_VERSION }));
+    localStorage.removeItem(`${key}:pending`);
+  }
+}
+
+async function probeKokoroWebGpu() {
+  const key = webGpuProbeKey();
+  const cached = readStoredJson(`${key}:result`, null);
+  if (cached) return cached;
+  if (!("gpu" in navigator)) return { ok: false, reason: "unavailable" };
+  localStorage.setItem(`${key}:pending`, "true");
+  const candidate = new KokoroWebGPU(ttsCallbacks());
+  candidate.setEpoch(state.generationEpoch);
+  try {
+    setNeuralLoading(null, "Safely testing Kokoro WebGPU");
+    const rtf = await candidate.benchmark();
+    const result = { ok: Number.isFinite(rtf), rtf, version: TTS_APP_VERSION };
+    localStorage.setItem(`${key}:result`, JSON.stringify(result));
+    if (result.ok) return { ...result, backend: candidate };
+    await candidate.dispose();
+    return result;
+  } catch (error) {
+    await candidate.dispose();
+    const result = { ok: false, reason: error.message, version: TTS_APP_VERSION };
+    localStorage.setItem(`${key}:result`, JSON.stringify(result));
+    return result;
+  } finally {
+    localStorage.removeItem(`${key}:pending`);
+  }
+}
+
+async function benchmarkBackend(candidate) {
+  candidate.setEpoch(state.generationEpoch);
+  const rtf = await candidate.benchmark();
+  console.info("[Hear TTS] benchmark", JSON.stringify({ backend: candidate.id, rtf }));
+  return { candidate, rtf };
+}
+
+async function chooseAutomaticBackend() {
+  const webGpu = await probeKokoroWebGpu();
+  if (webGpu.ok && webGpu.rtf < 0.8) {
+    if (webGpu.backend) return webGpu.backend;
+    const candidate = new KokoroWebGPU(ttsCallbacks());
+    await candidate.load();
+    return candidate;
+  }
+
+  try {
+    const result = await benchmarkBackend(new KittenWasm(ttsCallbacks()));
+    if (result.rtf < 0.8) return result.candidate;
+    await result.candidate.dispose();
+  } catch (error) {
+    console.warn("[Hear TTS] Kitten benchmark failed", error);
+  }
+
+  try {
+    const result = await benchmarkBackend(new KokoroWasm(ttsCallbacks()));
+    if (result.rtf < 1) return result.candidate;
+    await result.candidate.dispose();
+  } catch (error) {
+    console.warn("[Hear TTS] Kokoro WASM benchmark failed", error);
+  }
+  return null;
+}
+
+async function createSelectedBackend() {
+  if (state.backendPreference === "auto") return chooseAutomaticBackend();
+  if (state.backendPreference === "kitten") return new KittenWasm(ttsCallbacks());
+  if (state.backendPreference === "kokoro") {
+    const probe = await probeKokoroWebGpu();
+    if (probe.ok && probe.rtf < 0.8) return probe.backend || new KokoroWebGPU(ttsCallbacks());
+    return new KokoroWasm(ttsCallbacks());
+  }
+  return null;
+}
+
+function clearNeuralCache() {
+  for (const entry of state.neuralCache.values()) URL.revokeObjectURL(entry.url);
+  state.neuralCache.clear();
+  state.currentAudioUrl = null;
+}
+
+async function resetNeuralWorker(error = new Error("The local voice engine was reset.")) {
+  state.generationEpoch += 1;
+  state.neuralRunId += 1;
+  state.neuralReady = false;
+  state.bufferFillPromise = null;
+  const backend = state.ttsBackend;
+  state.ttsBackend = null;
+  state.activeBackendId = null;
+  await backend?.dispose();
+  hideLoading();
+  if (error.name !== "BackendRestartError") console.info("[Hear TTS] worker restart", error.message);
+}
+
+async function ensureNeuralWorker({ background = false } = {}) {
+  if (state.ttsBackend) {
+    await state.ttsBackend.load();
+    return state.ttsBackend;
+  }
+  if (!background) setNeuralLoading(null, "Selecting the fastest private voice");
+  const backend = await createSelectedBackend();
+  if (!backend) {
+    state.engine = "system";
+    state.activeBackendId = "system";
+    updateEngineUI();
+    hideLoading();
+    return null;
+  }
+  state.ttsBackend = backend;
+  state.activeBackendId = backend.id;
+  backend.setEpoch(state.generationEpoch);
+  await backend.load();
+  state.neuralReady = true;
+  updateEngineUI();
+  hideLoading();
+  return backend;
+}
+
+function trimNeuralCache() {
+  if (state.neuralCache.size <= 16) return;
+  for (const [key, entry] of state.neuralCache) {
+    if (entry.url === state.currentAudioUrl) continue;
+    URL.revokeObjectURL(entry.url);
+    state.neuralCache.delete(key);
+    if (state.neuralCache.size <= 16) break;
+  }
+}
+
+async function generateNeuralText(text, segmentKey = "", priority = 2, epoch = state.generationEpoch) {
+  const backend = await ensureNeuralWorker();
+  if (!backend) throw new Error("SystemVoiceFallback");
+  const voice = backend.id === "kitten-wasm" ? "Bella" : state.neuralVoice;
+  const identity = backend.cacheIdentity;
+  const cacheKey = await createAudioCacheKey({
+    text,
+    model: identity.model,
+    voice,
+    speed: 1,
+    dtype: identity.dtype,
+  });
+  if (state.neuralCache.has(cacheKey)) return state.neuralCache.get(cacheKey);
+  const stored = await getCachedAudio(cacheKey).catch(() => null);
+  if (stored?.blob) {
+    const entry = { url: URL.createObjectURL(stored.blob), duration: stored.duration, cacheKey, segmentKey };
+    state.neuralCache.set(cacheKey, entry);
+    trimNeuralCache();
+    return entry;
+  }
+  const result = await backend.generate(text, { voice, speed: 1, priority, epoch });
+  if (epoch !== state.generationEpoch) {
+    const error = new Error("Discarded audio from an earlier playback position.");
+    error.name = "StaleGenerationError";
+    throw error;
+  }
+  const blob = new Blob([result.buffer], { type: "audio/wav" });
+  const entry = { url: URL.createObjectURL(blob), duration: result.duration, cacheKey, segmentKey };
+  state.neuralCache.set(cacheKey, entry);
+  putCachedAudio({ key: cacheKey, blob, duration: result.duration }).catch((error) => {
+    console.warn("[Hear TTS] could not persist generated audio", error);
+  });
+  trimNeuralCache();
+  return entry;
+}
+
+function getNeuralSegment(segmentIndex, priority = 2, epoch = state.generationEpoch) {
+  const segment = state.neuralSegments[segmentIndex];
+  if (!segment) return Promise.reject(new Error("That part of the work is unavailable."));
+  return generateNeuralText(segment.text, String(segmentIndex), priority, epoch);
+}
+
+function averageRtf() {
+  if (!state.rtfSamples.length) return 0.7;
+  return state.rtfSamples.reduce((sum, value) => sum + value, 0) / state.rtfSamples.length;
+}
+
+function bufferTargetSeconds(startup) {
+  const rtf = averageRtf();
+  if (startup) return rtf >= 0.9 ? 18 : 12;
+  if (rtf >= 0.9) return 60;
+  if (rtf >= 0.7) return 45;
+  return 30;
+}
+
+async function prepareAudioBuffer(startIndex, { startup = false, epoch = state.generationEpoch } = {}) {
+  let bufferedSeconds = 0;
+  let first = null;
+  for (let index = startIndex; index < state.neuralSegments.length && bufferedSeconds < bufferTargetSeconds(startup); index += 1) {
+    const priority = index === startIndex ? 0 : index === startIndex + 1 ? 1 : 2;
+    const entry = await getNeuralSegment(index, priority, epoch);
+    if (epoch !== state.generationEpoch) throw new Error("Discarded stale buffer work.");
+    first ||= entry;
+    bufferedSeconds += entry.duration;
+  }
+  return first;
+}
+
+function maintainAudioBuffer(nextIndex, epoch = state.generationEpoch) {
+  if (state.bufferFillPromise || nextIndex >= state.neuralSegments.length) return;
+  state.bufferFillPromise = prepareAudioBuffer(nextIndex, { epoch })
+    .catch((error) => {
+      if (error.name !== "StaleGenerationError" && epoch === state.generationEpoch) {
+        console.warn("[Hear TTS] background buffer stopped", error);
+      }
+    })
+    .finally(() => {
+      if (epoch === state.generationEpoch) state.bufferFillPromise = null;
+    });
 }
 
 function createSilentWavUrl() {
@@ -1453,13 +1777,14 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   }
 
   const safeIndex = Math.min(Math.max(0, chunkIndex), state.chunks.length - 1);
-  const segmentIndex = neuralSegmentIndexForChunk(safeIndex);
+  const segmentIndex = neuralSegmentIndexForWord(targetWord ?? state.chunks[safeIndex]?.startWord ?? 0);
   const segment = state.neuralSegments[segmentIndex];
   if (!segment) return;
 
   state.runId += 1;
   if (supportsSpeech) synth.cancel();
   const runId = ++state.neuralRunId;
+  const epoch = state.generationEpoch;
   if (elements.mediaAudio.dataset.mode && elements.mediaAudio.dataset.mode !== "unlock") {
     state.mediaSwitching = true;
     elements.mediaAudio.pause();
@@ -1473,7 +1798,12 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   updateProgress(targetWord ?? segment.startWord);
 
   try {
-    const audio = await getNeuralSegment(segmentIndex);
+    const audio = await prepareAudioBuffer(segmentIndex, { startup: true, epoch });
+    if (!audio || state.engine === "system") {
+      state.currentIndex = safeIndex;
+      startSpeechAt(safeIndex);
+      return;
+    }
     if (runId !== state.neuralRunId || state.engine !== "neural") return;
 
     state.mediaSwitching = true;
@@ -1502,11 +1832,15 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
     state.mediaSwitching = false;
     setPlaybackState("playing");
     updateActiveBlock(state.chunks[state.currentIndex]);
-    getNeuralSegment(segmentIndex + 1).catch(() => {});
-    getNeuralSegment(segmentIndex + 2).catch(() => {});
+    maintainAudioBuffer(segmentIndex + 1, epoch);
   } catch (error) {
     if (runId !== state.neuralRunId) return;
     state.mediaSwitching = false;
+    if (error.message === "SystemVoiceFallback" || state.engine === "system") {
+      showToast("Local generation is too slow here, so Hear switched to the system voice.");
+      startSpeechAt(safeIndex);
+      return;
+    }
     setPlaybackState("paused");
     updateActiveBlock(state.chunks[state.currentIndex]);
     if (error.name === "NotAllowedError") {
@@ -1558,6 +1892,7 @@ function setPlaybackState(nextState) {
       : nextState === "paused"
         ? "paused"
         : "none";
+    elements.mediaAudio.dataset.mediaSessionPlaybackState = navigator.mediaSession.playbackState;
   }
 }
 
@@ -1702,9 +2037,22 @@ function seekToIndex(index, preservePlaying = true, targetWord = null) {
   const wasPlaying = state.playback === "playing";
   state.currentIndex = Math.min(Math.max(0, index), Math.max(0, state.chunks.length - 1));
   state.boundaryWords = 0;
+  if (state.engine === "neural") {
+    stopNeural(true);
+    const restart = resetNeuralWorker(new Error("Playback position changed."));
+    if (wasPlaying && preservePlaying) {
+      setPlaybackState("buffering");
+      restart.then(() => playNeuralFromChunk(state.currentIndex, targetWord));
+    } else {
+      setPlaybackState(state.playback === "idle" ? "idle" : "paused");
+      updateActiveBlock(state.chunks[state.currentIndex]);
+      updateProgress(targetWord);
+    }
+    savePosition();
+    return;
+  }
   if (wasPlaying && preservePlaying) {
-    if (state.engine === "neural") playNeuralFromChunk(state.currentIndex, targetWord);
-    else startSpeechAt(state.currentIndex);
+    startSpeechAt(state.currentIndex);
   } else {
     stopSpeech(state.playback === "idle" ? "idle" : "paused");
     updateActiveBlock(state.chunks[state.currentIndex]);
@@ -1902,13 +2250,15 @@ function setRate(nextRate, restartSpeech = true) {
 
 function activateWork(work) {
   stopSpeech("idle");
+  resetNeuralWorker(new Error("A different work was opened."));
   clearNeuralCache();
   state.article = work;
   state.chunks = createSpeechChunks(work);
   state.neuralSegments = createNeuralSegments(state.chunks);
-  state.engine = work.lang.toLowerCase().startsWith("en")
-    ? localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural"
+  state.backendPreference = work.lang.toLowerCase().startsWith("en")
+    ? localStorage.getItem(`${STORAGE_PREFIX}tts-backend`) || "auto"
     : "system";
+  state.engine = state.backendPreference === "system" ? "system" : "neural";
   state.currentIndex = 0;
   state.currentSegmentIndex = 0;
   state.boundaryWords = 0;
@@ -2000,6 +2350,7 @@ function updateMediaMetadata() {
     album: `${state.article.sourceLabel || "Hear"} · listening edition`,
     artwork,
   });
+  elements.mediaAudio.dataset.mediaSessionTitle = navigator.mediaSession.metadata?.title || "";
 }
 
 function initMediaSession() {
@@ -2026,19 +2377,21 @@ function initMediaSession() {
   }
 }
 
-function selectEngine(nextEngine) {
-  if (nextEngine === "neural" && !naturalVoiceAvailable()) {
+async function selectEngine(nextEngine) {
+  if (nextEngine !== "system" && !naturalVoiceAvailable()) {
     showToast("Natural voice currently supports English works.");
     return;
   }
-  if (nextEngine === state.engine) return;
+  if (nextEngine === state.backendPreference) return;
 
   const wasPlaying = state.playback === "playing";
   const targetWord = currentWordPosition();
   const targetIndex = chunkIndexForWord(targetWord);
   stopSpeech("paused");
-  state.engine = nextEngine;
-  localStorage.setItem(`${STORAGE_PREFIX}engine`, nextEngine);
+  await resetNeuralWorker(new Error("Playback model changed."));
+  state.backendPreference = nextEngine;
+  state.engine = nextEngine === "system" ? "system" : "neural";
+  localStorage.setItem(`${STORAGE_PREFIX}tts-backend`, nextEngine);
   state.currentIndex = targetIndex;
   state.currentSegmentIndex = neuralSegmentIndexForChunk(targetIndex);
   updateEngineUI();
@@ -2046,7 +2399,7 @@ function selectEngine(nextEngine) {
   updateProgress();
 
   if (wasPlaying) {
-    if (nextEngine === "neural") requestNeuralAction(() => playNeuralFromChunk(targetIndex, targetWord));
+    if (state.engine === "neural") requestNeuralAction(() => playNeuralFromChunk(targetIndex, targetWord));
     else startSpeechAt(targetIndex);
   }
 }
@@ -2188,15 +2541,20 @@ elements.seekRange.addEventListener("change", () => {
 });
 
 elements.voiceButton.addEventListener("click", () => elements.voiceSheet.showModal());
-elements.naturalEngine.addEventListener("click", () => selectEngine("neural"));
+elements.autoEngine.addEventListener("click", () => selectEngine("auto"));
+elements.kokoroEngine.addEventListener("click", () => selectEngine("kokoro"));
+elements.kittenEngine.addEventListener("click", () => selectEngine("kitten"));
 elements.systemEngine.addEventListener("click", () => selectEngine("system"));
-elements.naturalVoiceSelect.addEventListener("change", () => {
+elements.naturalVoiceSelect.addEventListener("change", async () => {
   const targetWord = currentWordPosition();
+  const wasPlaying = state.playback === "playing";
   state.neuralVoice = elements.naturalVoiceSelect.value;
   localStorage.setItem(`${STORAGE_PREFIX}neural-voice`, state.neuralVoice);
+  stopNeural(true);
+  await resetNeuralWorker(new Error("Voice changed."));
   clearNeuralCache();
   updateEngineUI();
-  if (state.playback === "playing" && state.engine === "neural") {
+  if (wasPlaying && state.engine === "neural") {
     playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
   }
 });
@@ -2364,6 +2722,16 @@ if (supportsSpeech) {
 }
 
 setRate(state.rate, false);
+markInterruptedWebGpuProbe();
+console.log({
+  crossOriginIsolated,
+  sharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
+  cores: navigator.hardwareConcurrency,
+});
+document.documentElement.dataset.crossOriginIsolated = String(crossOriginIsolated);
+document.documentElement.dataset.sharedArrayBuffer = String(typeof SharedArrayBuffer !== "undefined");
+document.documentElement.dataset.hardwareConcurrency = String(navigator.hardwareConcurrency || "");
+requestPersistentStorage().then((persisted) => console.info("[Hear TTS] persistent storage", { persisted }));
 elements.followToggle.checked = state.follow;
 setBookmarklet();
 loadVoices();

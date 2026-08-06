@@ -1939,6 +1939,14 @@ input[type="range"]::-moz-range-thumb {
   border-left: 1px solid var(--line);
 }
 
+.engine-options button:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
+}
+
+.engine-options button:nth-child(3) {
+  border-left: 0;
+}
+
 .engine-options button[aria-pressed="true"] {
   color: var(--white);
   background: var(--ink);
