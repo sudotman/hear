@@ -1523,9 +1523,14 @@ async function chooseAutomaticBackend() {
 }
 
 async function createSelectedBackend() {
-  // Force Kokoro q8 through WASM.
-  // No WebGPU probing, Kitten loading, or backend benchmarking.
-  return new KokoroWasm(ttsCallbacks());
+  if (state.backendPreference === "auto") return chooseAutomaticBackend();
+  if (state.backendPreference === "kitten") return new KittenWasm(ttsCallbacks());
+  if (state.backendPreference === "kokoro") {
+    const probe = await probeKokoroWebGpu();
+    if (probe.ok && probe.rtf < 0.8) return probe.backend || new KokoroWebGPU(ttsCallbacks());
+    return new KokoroWasm(ttsCallbacks());
+  }
+  return null;
 }
 
 function clearNeuralCache() {
