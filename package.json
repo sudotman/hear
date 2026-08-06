@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "fflate": "^0.8.3",
-    "kokoro-js": "^1.2.1"
+    "onnxruntime-web": "^1.27.0",
+    "phonemizer": "^1.2.1"
   },
   "overrides": {
     "sharp": "^0.35.3"

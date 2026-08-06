@@ -117,15 +117,30 @@ const WORDS_PER_MINUTE = 185;
 const STORAGE_PREFIX = "hearwiki:";
 const LIBRARY_KEY = `${STORAGE_PREFIX}library-v2`;
 const PROGRESS_KEY = `${STORAGE_PREFIX}progress-v2`;
+const NEURAL_MODEL_KEY = `${STORAGE_PREFIX}neural-model`;
+const NEURAL_MODEL_VERSION = "kitten-tts-nano-v0.8";
 const NATURAL_VOICES = {
-  af_heart: { name: "Heart", note: "Warm, balanced American voice · the strongest all-round choice" },
-  af_bella: { name: "Bella", note: "Lively American voice · more expressive and animated" },
-  bf_emma: { name: "Emma", note: "Composed British voice · calm for long-form listening" },
-  bm_fable: { name: "Fable", note: "Characterful British voice · suited to storytelling" },
-  am_michael: { name: "Michael", note: "Grounded American voice · steady, lower narration" },
+  Bella: { name: "Bella", note: "Warm and balanced · the strongest all-round choice" },
+  Luna: { name: "Luna", note: "Bright and expressive · suited to lively prose" },
+  Rosie: { name: "Rosie", note: "Calm and composed · easygoing long-form narration" },
+  Jasper: { name: "Jasper", note: "Clear and steady · a grounded lower voice" },
+  Hugo: { name: "Hugo", note: "Measured and resonant · suited to storytelling" },
 };
-const NEURAL_INIT_STALL_MS = 120_000;
-const NEURAL_GENERATION_TIMEOUT_MS = 120_000;
+const LEGACY_NATURAL_VOICES = {
+  af_heart: "Bella",
+  af_bella: "Luna",
+  bf_emma: "Rosie",
+  bm_fable: "Hugo",
+  am_michael: "Jasper",
+};
+const savedNaturalVoice = localStorage.getItem(`${STORAGE_PREFIX}neural-voice`);
+const initialNaturalVoice = NATURAL_VOICES[savedNaturalVoice]
+  ? savedNaturalVoice
+  : LEGACY_NATURAL_VOICES[savedNaturalVoice] || "Bella";
+const IS_APPLE_MOBILE = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const NEURAL_INIT_STALL_MS = 90_000;
+const NEURAL_GENERATION_TIMEOUT_MS = 45_000;
 const AUDIO_LOAD_TIMEOUT_MS = 15_000;
 const EXCLUDED_SECTIONS = new Set([
   "see also",
@@ -226,7 +241,7 @@ const state = {
   voices: [],
   selectedVoice: null,
   engine: localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural",
-  neuralVoice: localStorage.getItem(`${STORAGE_PREFIX}neural-voice`) || "af_heart",
+  neuralVoice: initialNaturalVoice,
   neuralWorker: null,
   neuralReady: false,
   neuralInitPromise: null,
@@ -893,7 +908,7 @@ function createSpeechChunks(article) {
   return chunks;
 }
 
-function createNeuralSegments(chunks, maxCharacters = 360) {
+function createNeuralSegments(chunks, maxCharacters = 220) {
   const segments = [];
   let current = null;
 
@@ -1116,20 +1131,20 @@ function updateEngineUI() {
   elements.systemVoiceRow.hidden = isNeural;
   elements.voiceType.textContent = isNeural ? "Natural · on device" : "System voice";
   elements.voiceName.textContent = isNeural
-    ? NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
+    ? NATURAL_VOICES[state.neuralVoice]?.name || "Bella"
     : state.selectedVoice?.name || "System voice";
   elements.voiceButton.setAttribute(
     "aria-label",
-    `Voice settings, ${isNeural ? `Natural, ${NATURAL_VOICES[state.neuralVoice]?.name || "Heart"}` : state.selectedVoice?.name || "System voice"}`,
+    `Voice settings, ${isNeural ? `Natural, ${NATURAL_VOICES[state.neuralVoice]?.name || "Bella"}` : state.selectedVoice?.name || "System voice"}`,
   );
   elements.engineDescription.textContent = naturalVoiceAvailable()
-    ? "Kokoro 82M · generated privately on this device"
+    ? "KittenTTS 15M · generated privately on this device"
     : "Natural voice currently supports English works";
   elements.voiceNote.textContent = isNeural
-    ? "The first use downloads about 100 MB of model files. Safari caches them locally; the text you listen to never goes to a speech service."
+    ? "The first use downloads about 60 MB of voice files. Safari caches them locally; the text you listen to never goes to a speech service."
     : "System voices start instantly, but Safari may expose only its compact voices. Natural voice is the higher-quality option for English works.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
-  elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.af_heart.note;
+  elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.Bella.note;
 }
 
 function clearNeuralCache() {
@@ -1221,6 +1236,8 @@ function ensureNeuralWorker({ background = false } = {}) {
         setNeuralLoading(message.progress, `Downloading voice model · ${Math.round(message.progress)}%`);
       } else if (message.status === "initiate" || message.status === "starting") {
         setNeuralLoading(null, "Preparing voice files");
+      } else if (message.status === "initializing") {
+        setNeuralLoading(null, "Starting the low-memory voice engine");
       }
       return;
     }
@@ -1228,7 +1245,7 @@ function ensureNeuralWorker({ background = false } = {}) {
     if (message.type === "ready") {
       clearNeuralInitTimer();
       state.neuralReady = true;
-      localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
+      localStorage.setItem(NEURAL_MODEL_KEY, NEURAL_MODEL_VERSION);
       const resolveInitialization = state.neuralInitResolve;
       state.neuralInitPromise = null;
       state.neuralInitResolve = null;
@@ -1302,7 +1319,8 @@ async function generateNeuralText(text, cacheKey = "") {
   const existing = [...state.neuralRequests.values()].find((request) => request.cacheKey === cacheKey && cacheKey);
   if (existing) return existing.promise;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const attempts = IS_APPLE_MOBILE ? 1 : 2;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       await ensureNeuralWorker();
       const id = ++state.neuralRequestId;
@@ -1329,7 +1347,7 @@ async function generateNeuralText(text, cacheKey = "") {
       state.neuralWorker.postMessage({ type: "generate", id, text, voice: state.neuralVoice });
       return await promise;
     } catch (error) {
-      if (!error.recoverable || attempt > 0) throw error;
+      if (!error.recoverable || attempt >= attempts - 1) throw error;
       setNeuralLoading(null, "Restarting the private voice engine");
     }
   }
@@ -1410,7 +1428,7 @@ function releaseUnlockAudio() {
 
 function requestNeuralAction(action) {
   state.pendingNeuralAction = action;
-  if (state.neuralReady || localStorage.getItem(`${STORAGE_PREFIX}neural-ready`) === "true") {
+  if (state.neuralReady || localStorage.getItem(NEURAL_MODEL_KEY) === NEURAL_MODEL_VERSION) {
     unlockMediaAudio();
     state.pendingNeuralAction = null;
     action();
@@ -1511,12 +1529,22 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
     updateActiveBlock(state.chunks[state.currentIndex]);
     if (error.name === "NotAllowedError") {
       showToast("Tap play once more to start audio.");
-    } else if (error.name === "TimeoutError") {
-      showToast("Natural voice was reset after taking too long. Press play to retry, or choose System voice.");
     } else {
-      showToast("Natural voice could not start. Press play to retry, or choose System voice.");
+      continueWithSystemVoice(safeIndex);
     }
   }
+}
+
+function continueWithSystemVoice(chunkIndex) {
+  const fallbackError = new Error("The natural voice is unavailable in this Safari session.");
+  stopNeural(true);
+  resetNeuralWorker(fallbackError);
+  state.engine = "system";
+  updateEngineUI();
+  showToast(IS_APPLE_MOBILE
+    ? "Natural voice could not finish on this iPhone. Continuing with its on-device voice."
+    : "Natural voice could not finish in this browser. Continuing with its on-device voice.");
+  startSpeechAt(chunkIndex);
 }
 
 function pauseNeural() {
@@ -1922,7 +1950,7 @@ function activateWork(work) {
   updateProgress();
   rememberWork(work);
 
-  if (state.engine === "neural" && localStorage.getItem(`${STORAGE_PREFIX}neural-ready`) === "true") {
+  if (state.engine === "neural" && localStorage.getItem(NEURAL_MODEL_KEY) === NEURAL_MODEL_VERSION) {
     const warmNaturalVoice = () => ensureNeuralWorker({ background: true }).catch(() => {});
     if ("requestIdleCallback" in window) window.requestIdleCallback(warmNaturalVoice, { timeout: 2500 });
     else window.setTimeout(warmNaturalVoice, 500);
