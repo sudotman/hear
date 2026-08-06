@@ -16,9 +16,9 @@ Catalog metadata comes from each library's public catalog. Standard Ebooks works
 
 ## Voices
 
-Natural English narration uses [KittenTTS Nano v0.8](https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX), an open-weight 15-million-parameter speech model, through ONNX Runtime Web and phonemizer.js. Hear uses ONNX Runtime's standard WASM build—not its WebGPU/JSEP build—in a single-threaded background worker with memory arenas disabled. This avoids the Safari 26 JSEP compilation issue and keeps peak memory low enough for iPhone. The first use downloads about 60 MB of voice files, which Safari caches for later sessions.
+Natural English narration uses [Kokoro v1.0](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX), an open-weight 82-million-parameter speech model, through `kokoro-js` and Transformers.js. Hear loads its mobile-friendly q8 edition in a Web Worker using WebAssembly. The first use downloads about 100 MB of model files, which Safari caches for later sessions.
 
-The five natural choices are voice profiles within the same model, not separate model downloads. Text is divided into short passages, generated locally as WAV audio, and prefetched while the current passage plays. Worker startup, generation, and audio loading have bounded recovery paths. If mobile Safari still terminates a local inference, Hear immediately continues with the device's system voice instead of leaving the player in a preparing state.
+The five natural choices are voice profiles within the same model, not separate model downloads. Text is divided into passages, generated locally as WAV audio, and prefetched while the current passage plays. Worker startup, generation, and audio loading have bounded recovery paths so a suspended mobile worker can be rebuilt instead of leaving the player permanently in a preparing state.
 
 System voice mode uses the browser's Web Speech API, starts immediately, and remains the fallback for non-English works. Safari does not expose its native **Listen to Page** Siri voice to webpage JavaScript; that voice can still be used from Safari's Page menu on Hear's cleaned reader view.
 
@@ -55,4 +55,4 @@ The repository includes a GitHub Pages workflow for `hear.satyam.lol`.
 
 Every catalog work retains a link to its source edition. Availability and public-domain status can vary by jurisdiction; the source library's terms apply. Wikipedia text is reused under the [Creative Commons Attribution-ShareAlike License](https://creativecommons.org/licenses/by-sa/4.0/), and Wikimedia images retain their source licenses.
 
-KittenTTS Nano and its model weights are distributed under the Apache 2.0 license.
+Kokoro and its model weights are distributed under the Apache 2.0 license.

@@ -241,7 +241,7 @@
         <button class="rate-button" id="rate-button" type="button" aria-label="Change playback speed">1×</button>
         <button class="voice-button" id="voice-button" type="button" aria-label="Voice and playback settings">
           <span class="voice-orb" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="voice-label"><small id="voice-type">Natural voice</small><strong id="voice-name">Bella</strong></span>
+          <span class="voice-label"><small id="voice-type">Natural voice</small><strong id="voice-name">Heart</strong></span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" /></svg>
         </button>
       </div>
@@ -276,7 +276,7 @@
       <div class="setting-row engine-setting-row">
         <div class="setting-label">
           <span>Playback engine</span>
-          <small id="engine-description">KittenTTS 15M · generated privately on this device</small>
+          <small id="engine-description">Kokoro 82M · generated privately on this device</small>
         </div>
         <div class="engine-options" role="group" aria-label="Playback engine">
           <button id="natural-engine" type="button" aria-pressed="true">
@@ -297,21 +297,21 @@
         </label>
         <div class="voice-choice">
           <select id="natural-voice-select">
-            <option value="Bella">Bella · warm · all-round</option>
-            <option value="Luna">Luna · bright · expressive</option>
-            <option value="Rosie">Rosie · composed · long-form</option>
-            <option value="Jasper">Jasper · grounded · steady</option>
-            <option value="Hugo">Hugo · measured · narrative</option>
+            <option value="af_heart">Heart · warm American · all-round</option>
+            <option value="af_bella">Bella · lively American · expressive</option>
+            <option value="bf_emma">Emma · composed British · long-form</option>
+            <option value="bm_fable">Fable · characterful British · narrative</option>
+            <option value="am_michael">Michael · grounded American · steady</option>
           </select>
-          <p class="voice-traits" id="voice-traits">Warm and balanced · the strongest all-round choice</p>
+          <p class="voice-traits" id="voice-traits">Warm, balanced American voice · the strongest all-round choice</p>
         </div>
       </div>
 
       <details class="model-details">
         <summary>What is the natural voice?</summary>
-        <p><strong>KittenTTS Nano</strong> is an open-weight, 15-million-parameter speech model. Hear uses a low-memory, single-threaded WebAssembly engine in a background worker so it can run reliably in mobile Safari.</p>
+        <p><strong>Kokoro v1.0</strong> is an open-weight, 82-million-parameter speech model. Hear uses its mobile-friendly 8-bit edition in a background worker, so generation stays responsive and private.</p>
         <p>The five choices are voice profiles inside the same model—not five separate downloads. Model files are cached by Safari; the text and generated audio stay on this device.</p>
-        <a href="https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX" target="_blank" rel="noreferrer">Model card and voice details ↗</a>
+        <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX" target="_blank" rel="noreferrer">Model card and voice samples ↗</a>
       </details>
 
       <div class="setting-row voice-select-row" id="system-voice-row" hidden>
@@ -344,7 +344,7 @@
       <div class="sheet-actions">
         <button id="preview-voice" type="button">Preview voice</button>
         <div class="voice-notes">
-          <p id="voice-note">The first use downloads about 60 MB of voice files. Safari caches them locally; the text you listen to never goes to a speech service.</p>
+          <p id="voice-note">The first use downloads about 100 MB of model files. Safari caches them locally; the text you listen to never goes to a speech service.</p>
           <p class="safari-voice-tip"><strong>Prefer Apple’s voice?</strong> In Safari’s Page menu, choose <em>Listen to Page</em>. This copy is already citation-free.</p>
         </div>
       </div>
@@ -361,7 +361,7 @@
         </button>
       </div>
       <div class="neural-promise">
-        <div class="download-size"><strong>~60</strong><span>MB once</span></div>
+        <div class="download-size"><strong>~100</strong><span>MB once</span></div>
         <p>Hear will download an open neural voice and generate each passage on your iPhone or Mac. Nothing is uploaded, and the resulting audio appears in iOS Control Center like a podcast.</p>
       </div>
       <div class="neural-actions">
