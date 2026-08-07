@@ -13,9 +13,23 @@ const SYMBOLS = [
 ];
 const SYMBOL_IDS = new Map(SYMBOLS.map((symbol, index) => [symbol, index]));
 
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 function tokenize(phonemes) {
   const tokens = [...phonemes].flatMap((character) => SYMBOL_IDS.has(character) ? [SYMBOL_IDS.get(character)] : []);
-  return [0, ...tokens, 10, 0];
+  // Fix garbled KittenTTS (Windows/iOS/Mac): old code returned [0, ...tokens, 10, 0]
+  // where 10 is "…" (ellipsis), not EOS – it injected a spurious phoneme that
+  // made every utterance harsh/garbled. Correct is [0, ...tokens, 0].
+  const ids = [0, ...tokens, 0];
+  if (ids.length > 510) return [...ids.slice(0, 509), 0];
+  return ids;
 }
 
 function parseNpy(bytes) {
@@ -149,7 +163,8 @@ export class KittenRuntime {
       return (await phonemize(part, "en-us")).join(" ");
     }));
     const inputIds = tokenize(phonemeParts.join(""));
-    const styleIndex = Math.min(text.length, voiceData.shape[0] - 1);
+    if (inputIds.length < 4) throw new Error("This passage is too short to synthesize.");
+    const styleIndex = hashString(`${voiceId}:${text.slice(0, 64)}`) % voiceData.shape[0];
     const styleSize = voiceData.shape[1];
     const style = voiceData.data.slice(styleIndex * styleSize, (styleIndex + 1) * styleSize);
     const adjustedSpeed = speed * (this.config.speed_priors?.[voiceId] || 1);
@@ -160,7 +175,15 @@ export class KittenRuntime {
     });
     const waveform = result[this.session.outputNames[0]].data;
     if (!waveform.length || !Number.isFinite(waveform[0])) throw new Error("Kitten produced invalid audio on this device.");
-    return { audio: waveform.length > SAMPLE_RATE ? waveform.slice(0, -5000) : waveform, samplingRate: SAMPLE_RATE };
+    if (waveform.length > SAMPLE_RATE * 0.6) {
+      let tailSilence = 0;
+      for (let i = waveform.length - 1; i >= Math.max(0, waveform.length - 1200); i -= 1) {
+        if (Math.abs(waveform[i]) < 0.005) tailSilence += 1;
+        else break;
+      }
+      if (tailSilence > 600) return { audio: waveform.slice(0, waveform.length - tailSilence), samplingRate: SAMPLE_RATE };
+    }
+    return { audio: waveform, samplingRate: SAMPLE_RATE };
   }
 
   async dispose() {
