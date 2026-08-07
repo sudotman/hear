@@ -15,7 +15,10 @@ const SYMBOLS = [
 const SYMBOL_IDS = new Map(SYMBOLS.map((symbol, index) => [symbol, index]));
 
 function basic_english_tokenize(text) {
-  return text.match(/\w+|[^\w\s]/g) || [];
+  // Python parity: re.findall(r"\w+|[^\w\s]", text) with re.UNICODE.
+  // Py \w = Unicode letters/numbers/underscore (includes IPA letters + Lm like ˈˌː).
+  // JS \w is ASCII-only, so use Unicode property escapes to match Python.
+  return text.match(/[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]/gu) || [];
 }
 
 function tokenize(phonemes) {
