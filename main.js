@@ -2364,10 +2364,16 @@ function seekToIndex(index, preservePlaying = true, targetWord = null) {
   state.boundaryWords = 0;
   if (state.engine === "neural") {
     stopNeural(true);
-    const restart = resetNeuralWorker(new Error("Playback position changed."));
+    // Keep the model loaded on seek — bump epoch to cancel in-flight generations
+    // without disposing the backend. Previously this called resetNeuralWorker()
+    // which tore down the worker and forced a re-download even for cached segments.
+    state.generationEpoch += 1;
+    state.neuralRunId += 1;
+    state.bufferFillPromise = null;
+    state.ttsBackend?.setEpoch(state.generationEpoch);
     if (wasPlaying && preservePlaying) {
       setPlaybackState("buffering");
-      restart.then(() => playNeuralFromChunk(state.currentIndex, targetWord));
+      playNeuralFromChunk(state.currentIndex, targetWord);
     } else {
       setPlaybackState(state.playback === "idle" ? "idle" : "paused");
       updateActiveBlock(state.chunks[state.currentIndex]);
