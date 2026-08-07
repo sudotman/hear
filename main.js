@@ -3039,7 +3039,7 @@ elements.mediaAudio.addEventListener("ended", () => {
   if (state.engine !== "neural" || state.playback !== "playing") return;
   const nextSegment = state.currentSegmentIndex + 1;
   if (nextSegment >= state.neuralSegments.length) finishPlayback();
-  else playNeuralFromChunk(state.neuralSegments[nextSegment].startChunk);
+  else playNeuralFromChunk(state.neuralSegments[nextSegment].startChunk, state.neuralSegments[nextSegment].startWord);
 });
 
 elements.mediaAudio.addEventListener("pause", () => {
