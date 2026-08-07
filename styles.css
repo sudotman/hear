@@ -386,7 +386,6 @@ body.library-open .site-header .header-search {
   color: rgba(241, 238, 229, 0.62);
   font-size: 11px;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
 
 .edition-note span {
@@ -1937,6 +1936,14 @@ input[type="range"]::-moz-range-thumb {
 
 .engine-options button + button {
   border-left: 1px solid var(--line);
+}
+
+.engine-options button:nth-child(n + 3) {
+  border-top: 1px solid var(--line);
+}
+
+.engine-options button:nth-child(3) {
+  border-left: 0;
 }
 
 .engine-options button[aria-pressed="true"] {

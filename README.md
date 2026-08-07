@@ -16,9 +16,11 @@ Catalog metadata comes from each library's public catalog. Standard Ebooks works
 
 ## Voices
 
-Natural English narration uses [KittenTTS Nano v0.8](https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX), an open-weight 15-million-parameter speech model, through ONNX Runtime Web and phonemizer.js. Hear uses ONNX Runtime's standard WASM build—not its WebGPU/JSEP build—in a single-threaded background worker with memory arenas disabled. This avoids the Safari 26 JSEP compilation issue and keeps peak memory low enough for iPhone. The first use downloads about 60 MB of voice files, which Safari caches for later sessions.
+English narration has four choices: **Auto**, **Natural — Kokoro**, **Efficient — Kitten**, and **Instant — System voice**. Auto benchmarks a crash-safe Kokoro FP32/WebGPU probe, Kitten Nano/WASM, and Kokoro q8/WASM in that order, then falls back to the system voice when local generation cannot sustain playback.
 
-The five natural choices are voice profiles within the same model, not separate model downloads. Text is divided into short passages, generated locally as WAV audio, and prefetched while the current passage plays. Worker startup, generation, and audio loading have bounded recovery paths. If mobile Safari still terminates a local inference, Hear immediately continues with the device's system voice instead of leaving the player in a preparing state.
+Every generated segment records its backend, model, text length, queue wait, generation time, audio duration, RTF, and any failure. Text starts with a short 80–120-character passage, then uses longer sentence-aligned passages. Startup and steady-state buffers adapt to measured RTF. Generated WAV files are persisted in IndexedDB using a hash of the text, model version, voice, speed, and dtype; the app also requests persistent browser storage.
+
+The generation worker runs one model request at a time, with current/next/background priorities and an epoch that discards stale results after seeking. Seeking, changing models, and changing voices restart the worker. The five Kokoro choices are voice profiles within the same model, not separate downloads.
 
 System voice mode uses the browser's Web Speech API, starts immediately, and remains the fallback for non-English works. Safari does not expose its native **Listen to Page** Siri voice to webpage JavaScript; that voice can still be used from Safari's Page menu on Hear's cleaned reader view.
 
@@ -41,18 +43,31 @@ Create a production build with `npm run build`; output is written to `dist/`.
 
 Imported EPUBs deliberately do not create shareable URLs because their contents stay in that browser.
 
+## WebGPU stress test
+
+`/webgpu-test/` is a separate build entry that does not share the app worker. It uses Transformers.js 4.2, its compatible ONNX Runtime Web build, Kokoro FP32, the Heart voice, and one fixed sentence. The page reports RTF for 20 consecutive generations and keeps the last WAV for inspection. Run it on each target iOS/Safari release before allowing that version through the main app’s WebGPU probe.
+
 ## Publish at hear.satyam.lol
 
-The repository includes a GitHub Pages workflow for `hear.satyam.lol`.
+GitHub Pages cannot configure the COOP/COEP response headers required for WebAssembly multithreading, so deployment has moved to Cloudflare Pages. The workflow expects a Cloudflare Pages project named `hearwiki` and these GitHub Actions secrets:
 
-1. Push the `main` branch to a GitHub repository.
-2. In **Settings → Pages**, choose **GitHub Actions** as the source.
-3. Set the custom domain to `hear.satyam.lol`.
-4. Point the `hear` CNAME record to `<your-github-username>.github.io`.
-5. After DNS resolves, enable **Enforce HTTPS**.
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN` with Pages edit permission
+
+The `public/_headers` file applies `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. After the first Cloudflare deployment, attach `hear.satyam.lol` to the Pages project and move the DNS record from GitHub Pages to the Cloudflare Pages custom-domain target.
+
+On the deployed iPhone, verify in Safari Web Inspector:
+
+```js
+console.log({
+  crossOriginIsolated,
+  sharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
+  cores: navigator.hardwareConcurrency,
+});
+```
 
 ## Content and attribution
 
 Every catalog work retains a link to its source edition. Availability and public-domain status can vary by jurisdiction; the source library's terms apply. Wikipedia text is reused under the [Creative Commons Attribution-ShareAlike License](https://creativecommons.org/licenses/by-sa/4.0/), and Wikimedia images retain their source licenses.
 
-KittenTTS Nano and its model weights are distributed under the Apache 2.0 license.
+Kokoro and its model weights are distributed under the Apache 2.0 license.
