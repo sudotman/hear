@@ -2037,6 +2037,38 @@ input[type="range"]::-moz-range-thumb {
   align-items: center;
 }
 
+.storage-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.storage-button {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.storage-button:hover {
+  border-color: var(--ink);
+}
+
+.storage-danger {
+  color: var(--accent-deep);
+  border-color: rgba(219, 89, 44, 0.35);
+}
+
+.storage-danger:hover {
+  border-color: var(--accent-deep);
+  background: rgba(219, 89, 44, 0.06);
+}
+
 .sheet-actions button,
 .copy-shortcut {
   min-width: 128px;

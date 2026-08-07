@@ -331,14 +331,86 @@
       <div class="setting-row voice-select-row" id="kokoro-device-row" hidden>
         <label for="kokoro-device-select">
           <span>Kokoro compute</span>
-          <small id="kokoro-device-help">WASM is stable · WebGPU is experimental</small>
+          <small id="kokoro-device-help">Device · WASM = stable · WebGPU = fast</small>
         </label>
         <div class="voice-choice">
           <select id="kokoro-device-select">
-            <option value="wasm">WASM · stable (q8)</option>
-            <option value="webgpu">WebGPU · experimental (fp32, fast)</option>
+            <option value="wasm">WASM · stable</option>
+            <option value="webgpu">WebGPU · experimental (fast)</option>
           </select>
           <p class="voice-traits" id="kokoro-device-note">Explicit, saved per device.</p>
+        </div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kokoro-dtype-row" hidden>
+        <label for="kokoro-dtype-select">
+          <span>Kokoro precision</span>
+          <small id="kokoro-dtype-help">Quantization · experiment freely</small>
+        </label>
+        <div class="voice-choice">
+          <select id="kokoro-dtype-select">
+            <option value="fp32">fp32 · full · 326 MB (model.onnx)</option>
+            <option value="fp16">fp16 · half · 163 MB (model_fp16.onnx)</option>
+            <option value="q8">q8 · quantized · 92 MB (model_quantized.onnx)</option>
+            <option value="q8f16">q8f16 · mixed · 86 MB (model_q8f16.onnx)</option>
+            <option value="q4">q4 · 4-bit · 305 MB (model_q4.onnx)</option>
+            <option value="q4f16">q4f16 · 4-bit+fp16 · 154 MB (model_q4f16.onnx)</option>
+            <option value="uint8">uint8 · 177 MB (model_uint8.onnx)</option>
+            <option value="uint8f16">uint8f16 · 114 MB (model_uint8f16.onnx)</option>
+          </select>
+          <p class="voice-traits" id="kokoro-dtype-note">Saved as hearwiki:kokoro-dtype. Cache key includes dtype — switching refetches.</p>
+        </div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kitten-model-row" hidden>
+        <label for="kitten-model-select">
+          <span>Kitten model</span>
+          <small id="kitten-model-help">Nano · Mini · Micro · experiment</small>
+        </label>
+        <div class="voice-choice">
+          <select id="kitten-model-select">
+            <option value="onnx-community/KittenTTS-Nano-v0.8-ONNX">Nano 0.8 · 15M · onnx-community (fp32) — default</option>
+            <option value="KittenML/kitten-tts-mini-0.8">Mini 0.8 · KittenML · larger · WASM</option>
+            <option value="KittenML/kitten-tts-micro-0.8">Micro 0.8 · KittenML · tiny · WASM</option>
+            <option value="onnx-community/kitten-tts-nano-0.1-ONNX">Nano 0.1 · legacy · onnx-community (quantized)</option>
+          </select>
+          <p class="voice-traits" id="kitten-model-note">Saved as hearwiki:kitten-model. WASM-only. Mini/Micro are experimental — try Nano first.</p>
+        </div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kitten-voice-row" hidden>
+        <label for="kitten-voice-select">
+          <span>Kitten voice</span>
+          <small>8 voices · Bella · Jasper · Luna · Bruno · Rosie · Hugo · Kiki · Leo</small>
+        </label>
+        <div class="voice-choice">
+          <select id="kitten-voice-select">
+            <option value="Bella">Bella · female · expr-2-f</option>
+            <option value="Jasper">Jasper · male · expr-2-m</option>
+            <option value="Luna">Luna · female · expr-3-f</option>
+            <option value="Bruno">Bruno · male · expr-3-m</option>
+            <option value="Rosie">Rosie · female · expr-4-f</option>
+            <option value="Hugo">Hugo · male · expr-4-m</option>
+            <option value="Kiki">Kiki · female · expr-5-f</option>
+            <option value="Leo">Leo · male · expr-5-m</option>
+          </select>
+          <p class="voice-traits" id="kitten-voice-traits">Warm, efficient Kitten voice — Bella is default.</p>
+        </div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kitten-dtype-row" hidden>
+        <label for="kitten-dtype-select">
+          <span>Kitten precision</span>
+          <small id="kitten-dtype-help">WASM dtype · experiment</small>
+        </label>
+        <div class="voice-choice">
+          <select id="kitten-dtype-select">
+            <option value="fp32">fp32 · full (default)</option>
+            <option value="fp16">fp16 · half (exp.)</option>
+            <option value="q8">q8 · quantized (exp.)</option>
+            <option value="q4">q4 · 4-bit (exp.)</option>
+          </select>
+          <p class="voice-traits" id="kitten-dtype-note">Saved as hearwiki:kitten-dtype. If dtype unsupported, will error.</p>
         </div>
       </div>
 
@@ -382,6 +454,18 @@
           <small>Bring the current paragraph into view</small>
         </label>
         <input id="follow-toggle" class="toggle" type="checkbox" checked />
+      </div>
+
+      <div class="setting-row" id="storage-row">
+        <div class="setting-label">
+          <span>Storage & cache</span>
+          <small id="storage-usage-label">Generated audio (IndexedDB) · library & progress (localStorage) · model files (browser cache)</small>
+        </div>
+        <div class="voice-choice storage-actions">
+          <button type="button" id="clear-audio-cache" class="text-button storage-button">Clear generated audio</button>
+          <button type="button" id="clear-all-data" class="text-button storage-button storage-danger">Clear all Hear data</button>
+          <p class="voice-traits" id="storage-note">No text or audio is sent to a server. “Clear generated audio” wipes hearwiki-tts-cache. “Clear all” also wipes hearwiki:tts-backend / kokoro-device / neural-voice, library, and progress.</p>
+        </div>
       </div>
 
       <div class="sheet-actions">

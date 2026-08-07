@@ -10,7 +10,7 @@ import {
   removeCachedWork,
 } from "./library.js";
 import { KokoroWebGPU, KokoroWasm, KittenWasm } from "./tts-backends.js";
-import { createAudioCacheKey, getCachedAudio, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
+import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, getTtsCacheCount, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -101,7 +101,23 @@ const elements = {
   kokoroDeviceSelect: $("#kokoro-device-select"),
   kokoroDeviceRow: $("#kokoro-device-row"),
   kokoroDeviceNote: $("#kokoro-device-note"),
+  kokoroDtypeSelect: $("#kokoro-dtype-select"),
+  kokoroDtypeRow: $("#kokoro-dtype-row"),
+  kokoroDtypeNote: $("#kokoro-dtype-note"),
+  kittenModelSelect: $("#kitten-model-select"),
+  kittenModelRow: $("#kitten-model-row"),
+  kittenModelNote: $("#kitten-model-note"),
+  kittenVoiceSelect: $("#kitten-voice-select"),
+  kittenVoiceRow: $("#kitten-voice-row"),
+  kittenVoiceTraits: $("#kitten-voice-traits"),
+  kittenDtypeSelect: $("#kitten-dtype-select"),
+  kittenDtypeRow: $("#kitten-dtype-row"),
+  kittenDtypeNote: $("#kitten-dtype-note"),
   activeModelLabel: $("#active-model-label"),
+  clearAudioCache: $("#clear-audio-cache"),
+  clearAllData: $("#clear-all-data"),
+  storageUsageLabel: $("#storage-usage-label"),
+  storageNote: $("#storage-note"),
   voiceNote: $("#voice-note"),
   rateRange: $("#rate-range"),
   rateOutput: $("#rate-output"),
@@ -237,6 +253,24 @@ const rawBackendPreference = localStorage.getItem(`${STORAGE_PREFIX}tts-backend`
 const initialBackendPreference = rawBackendPreference === "auto" ? "system" : rawBackendPreference || "system";
 const rawKokoroDevice = localStorage.getItem(`${STORAGE_PREFIX}kokoro-device`);
 const initialKokoroDevice = rawKokoroDevice === "webgpu" ? "webgpu" : "wasm";
+const rawKokoroDtype = localStorage.getItem(`${STORAGE_PREFIX}kokoro-dtype`);
+const KOKORO_DTYPE_DEFAULT = "q8";
+const KOKORO_DTYPES = ["fp32", "fp16", "q8", "q8f16", "q4", "q4f16", "uint8", "uint8f16"];
+const initialKokoroDtype = KOKORO_DTYPES.includes(rawKokoroDtype) ? rawKokoroDtype : KOKORO_DTYPE_DEFAULT;
+const rawKittenModel = localStorage.getItem(`${STORAGE_PREFIX}kitten-model`);
+const KITTEN_MODELS = [
+  "onnx-community/KittenTTS-Nano-v0.8-ONNX",
+  "KittenML/kitten-tts-mini-0.8",
+  "KittenML/kitten-tts-micro-0.8",
+  "onnx-community/kitten-tts-nano-0.1-ONNX",
+];
+const initialKittenModel = KITTEN_MODELS.includes(rawKittenModel) ? rawKittenModel : KITTEN_MODELS[0];
+const rawKittenDtype = localStorage.getItem(`${STORAGE_PREFIX}kitten-dtype`);
+const KITTEN_DTYPES = ["fp32", "fp16", "q8", "q4"];
+const initialKittenDtype = KITTEN_DTYPES.includes(rawKittenDtype) ? rawKittenDtype : "fp32";
+const rawKittenVoice = localStorage.getItem(`${STORAGE_PREFIX}kitten-voice`);
+const KITTEN_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"];
+const initialKittenVoice = KITTEN_VOICES.includes(rawKittenVoice) ? rawKittenVoice : "Bella";
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 function supportsWebGPU() {
   return typeof navigator !== "undefined" && "gpu" in navigator;
@@ -249,6 +283,10 @@ const state = {
   selectedVoice: null,
   backendPreference: initialBackendPreference,
   kokoroDevice: initialKokoroDevice,
+  kokoroDtype: initialKokoroDtype,
+  kittenModel: initialKittenModel,
+  kittenDtype: initialKittenDtype,
+  kittenVoice: initialKittenVoice,
   engine: initialBackendPreference === "system" ? "system" : "neural",
   activeBackendId: null,
   activeBackendModel: null,
@@ -1185,10 +1223,11 @@ function updateEngineUI() {
   if (elements.autoEngine) elements.autoEngine.hidden = true;
   if (elements.neuralBackendRow) elements.neuralBackendRow.hidden = true;
   const isNeural = state.engine === "neural";
-  // Explicit Kokoro device selector – only when Kokoro is the saved choice.
+  // Explicit device/dtype selectors – both engines now fully explicit.
+  const showKokoro = state.backendPreference === "kokoro";
+  const showKitten = state.backendPreference === "kitten";
   if (elements.kokoroDeviceRow) {
-    const showKokoroDevice = state.backendPreference === "kokoro";
-    elements.kokoroDeviceRow.hidden = !showKokoroDevice;
+    elements.kokoroDeviceRow.hidden = !showKokoro;
     if (elements.kokoroDeviceSelect) {
       elements.kokoroDeviceSelect.value = state.kokoroDevice;
       const webgpuOpt = elements.kokoroDeviceSelect.querySelector('option[value="webgpu"]');
@@ -1198,7 +1237,7 @@ function updateEngineUI() {
       }
     }
     if (elements.kokoroDeviceNote) {
-      const devLabel = state.kokoroDevice === "webgpu" ? "WebGPU fp32" : "WASM q8";
+      const devLabel = state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM";
       let note = `Compute: ${devLabel} · saved as hearwiki:kokoro-device.`;
       if (IS_ANDROID && state.kokoroDevice === "webgpu") note += " WebGPU often crashes on Android – WASM recommended.";
       if (!supportsWebGPU() && state.kokoroDevice === "webgpu") note += " WebGPU not detected; will fallback to WASM.";
@@ -1206,15 +1245,33 @@ function updateEngineUI() {
     }
     if (elements.kokoroDeviceSelect) elements.kokoroDeviceSelect.disabled = false;
   }
-  // Exact active model label – persisted and crash-safe
+  if (elements.kokoroDtypeRow) {
+    elements.kokoroDtypeRow.hidden = !showKokoro;
+    if (elements.kokoroDtypeSelect) elements.kokoroDtypeSelect.value = state.kokoroDtype;
+    if (elements.kokoroDtypeNote) {
+      const sizeMap = { fp32: "326 MB", fp16: "163 MB", q8: "92 MB", q8f16: "86 MB", q4: "305 MB", q4f16: "154 MB", uint8: "177 MB", uint8f16: "114 MB" };
+      elements.kokoroDtypeNote.textContent = `Kokoro 82M · ${state.kokoroDtype} · ${sizeMap[state.kokoroDtype] || ""} · saved as hearwiki:kokoro-dtype. Device=${state.kokoroDevice}.`;
+    }
+  }
+  if (elements.kittenModelRow) {
+    elements.kittenModelRow.hidden = !showKitten;
+    if (elements.kittenModelSelect) elements.kittenModelSelect.value = state.kittenModel;
+    if (elements.kittenModelNote) elements.kittenModelNote.textContent = `${state.kittenModel} · WASM-only · experiment freely.`;
+  }
+  if (elements.kittenDtypeRow) {
+    elements.kittenDtypeRow.hidden = !showKitten;
+    if (elements.kittenDtypeSelect) elements.kittenDtypeSelect.value = state.kittenDtype;
+    if (elements.kittenDtypeNote) elements.kittenDtypeNote.textContent = `Kitten dtype ${state.kittenDtype} · saved as hearwiki:kitten-dtype. Model=${state.kittenModel.split("/").pop()}.`;
+  }
+  // Exact active model label – persisted and crash-safe (includes dtype/model)
   if (elements.activeModelLabel) {
     let label = "";
     if (!isNeural) label = "System voice · instant · no download";
-    else if (state.activeBackendId === "kitten-wasm") label = "Kitten Nano 0.8 · onnx-community/KittenTTS-Nano-v0.8-ONNX · fp32 · WASM";
-    else if (state.activeBackendId === "kokoro-webgpu") label = "Kokoro 82M v1.0 · onnx-community/Kokoro-82M-v1.0-ONNX · fp32 · WebGPU";
-    else if (state.activeBackendId === "kokoro-wasm") label = "Kokoro 82M v1.0 · onnx-community/Kokoro-82M-v1.0-ONNX · q8 · WASM";
-    else if (state.backendPreference === "kitten") label = `Kitten Nano 0.8 · ${state.kokoroDevice === "webgpu" ? "fp32 · WASM (Kitten is WASM-only)" : "fp32 · WASM"} · will load on play`;
-    else if (state.backendPreference === "kokoro") label = `Kokoro 82M v1.0 · ${state.kokoroDevice === "webgpu" ? "fp32 · WebGPU (explicit)" : "q8 · WASM (explicit)"} · will load on play`;
+    else if (state.activeBackendId === "kitten-wasm") label = `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenModel} · ${state.kittenDtype} · WASM`;
+    else if (state.activeBackendId === "kokoro-webgpu") label = `Kokoro 82M v1.0 · ${state.kokoroDtype} · WebGPU`;
+    else if (state.activeBackendId === "kokoro-wasm") label = `Kokoro 82M v1.0 · ${state.kokoroDtype} · WASM`;
+    else if (state.backendPreference === "kitten") label = `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenModel} · ${state.kittenDtype} · WASM · will load on play`;
+    else if (state.backendPreference === "kokoro") label = `Kokoro 82M v1.0 · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"} · will load on play`;
     else label = "System voice · explicit choice saved";
     elements.activeModelLabel.textContent = label;
     elements.activeModelLabel.title = label;
@@ -1225,6 +1282,15 @@ function updateEngineUI() {
     element.disabled = choice !== "system" && !naturalVoiceAvailable();
   }
   elements.naturalVoiceRow.hidden = !isNeural || state.backendPreference === "kitten" || state.activeBackendId === "kitten-wasm";
+  // Kitten has its own 8-voice picker – show only for Kitten
+  if (elements.kittenVoiceRow) {
+    elements.kittenVoiceRow.hidden = !isNeural || !(state.backendPreference === "kitten" || state.activeBackendId === "kitten-wasm");
+    if (elements.kittenVoiceSelect) elements.kittenVoiceSelect.value = state.kittenVoice;
+    if (elements.kittenVoiceTraits) {
+      const map = { Bella: "Bella · expr-2-f · warm female", Jasper: "Jasper · expr-2-m · warm male", Luna: "Luna · expr-3-f", Bruno: "Bruno · expr-3-m", Rosie: "Rosie · expr-4-f", Hugo: "Hugo · expr-4-m", Kiki: "Kiki · expr-5-f", Leo: "Leo · expr-5-m" };
+      elements.kittenVoiceTraits.textContent = map[state.kittenVoice] || map.Bella;
+    }
+  }
   elements.systemVoiceRow.hidden = isNeural;
   const backendLabel = state.activeBackendId === "kitten-wasm"
     ? "Efficient · on device"
@@ -1239,7 +1305,7 @@ function updateEngineUI() {
             : "Natural · on device";
   elements.voiceType.textContent = isNeural ? backendLabel : "Instant · system";
   elements.voiceName.textContent = isNeural
-    ? state.activeBackendId === "kitten-wasm" ? "Bella" : NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
+    ? state.activeBackendId === "kitten-wasm" ? state.kittenVoice : NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
     : state.selectedVoice?.name || "System voice";
   elements.voiceButton.setAttribute(
     "aria-label",
@@ -1259,6 +1325,66 @@ function updateEngineUI() {
     : "System voices start instantly (no download). Choose Kitten (15M, fast) or Kokoro (82M, higher fidelity) to save an explicit local model choice.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
   elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.af_heart.note;
+  refreshStorageLabel();
+}
+
+async function refreshStorageLabel() {
+  if (!elements.storageUsageLabel) return;
+  try {
+    const count = await getTtsCacheCount().catch(() => null);
+    const suffix = Number.isFinite(count) ? ` · ${count} cached segment${count === 1 ? "" : "s"} in IndexedDB` : "";
+    elements.storageUsageLabel.textContent = `Generated audio (IndexedDB) · library & progress (localStorage) · model files (browser cache)${suffix}`;
+    if (elements.storageNote) elements.storageNote.textContent = `No text or audio is sent to a server. “Clear generated audio” wipes hearwiki-tts-cache${Number.isFinite(count) && count ? ` (${count} segments)` : ""}. “Clear all” also wipes hearwiki:tts-backend / kokoro-device / neural-voice, library, and progress.`;
+  } catch {}
+}
+
+async function handleClearAudioCache() {
+  const btn = elements.clearAudioCache;
+  if (btn) btn.disabled = true;
+  try {
+    await clearTtsCache();
+    clearNeuralCache();
+    // Also drop in-memory object URLs
+    state.neuralCache.clear?.();
+    await refreshStorageLabel();
+    showToast("Generated audio cleared — next play will regenerate");
+    hideLoading();
+  } catch (error) {
+    showToast(error.message || "Could not clear generated audio");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleClearAllData() {
+  if (!confirm("Clear all Hear data? This wipes generated audio, library, progress, and voice choice, then reloads.")) return;
+  const btn = elements.clearAllData;
+  if (btn) btn.disabled = true;
+  try {
+    await clearTtsCache().catch(() => {});
+    await deleteTtsDatabase().catch(() => {});
+    // Clear work cache DB
+    try {
+      indexedDB.deleteDatabase("hear-work-cache");
+    } catch {}
+    clearNeuralCache();
+    await resetNeuralWorker(new Error("Storage cleared")).catch(() => {});
+    // Wipe hearwiki:* localStorage keys
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(STORAGE_PREFIX)) localStorage.removeItem(key);
+    }
+    // Also remove webgpu probe keys
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key && key.includes("webgpu-probe")) localStorage.removeItem(key);
+    }
+    showToast("All Hear data cleared — reloading");
+    setTimeout(() => location.reload(), 600);
+  } catch (error) {
+    showToast(error.message || "Could not clear all data");
+    if (btn) btn.disabled = false;
+  }
 }
 
 function legacyClearNeuralCache() {
@@ -1542,10 +1668,15 @@ function ttsCallbacks() {
       const status = message.status || "";
       // Detailed: file + percent + backend. Kitten sends "onnx/model.onnx" + "voices" archive;
       // Kokoro sends model files via transformers progress_callback.
-      if (file.includes("onnx") && pct !== null) {
+      if (status === "loading") {
+        setNeuralLoading(null, `Initializing ${file || backendLabel} — compiling WASM`);
+      } else if (status === "ready") {
+        setNeuralLoading(100, `Voice ready [${backendLabel}]`);
+      } else if (file.includes("onnx") && pct !== null) {
         setNeuralLoading(message.progress, `Downloading ${file} [${backendLabel}] · ${pct}%`);
       } else if (file.includes("voices") && pct !== null) {
-        setNeuralLoading(message.progress, `Downloading Kitten voices [${backendLabel}] · ${pct}%`);
+        const label = file.includes("voices") ? "voices.npz" : file;
+        setNeuralLoading(message.progress, `Downloading ${label} [${backendLabel}] · ${pct}%`);
       } else if (status === "starting") {
         setNeuralLoading(null, `Starting ${backendLabel} [explicit choice]`);
       } else if (status === "progress" && pct !== null) {
@@ -1566,14 +1697,23 @@ function ttsCallbacks() {
       state.neuralReady = true;
       localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
       state.activeBackendId = message.backend || state.activeBackendId;
+      state.activeBackendModel = message.model || state.activeBackendModel;
+      // dtype/device from ready already includes chosen quant
       console.info("[Hear TTS] runtime", {
         crossOriginIsolated: message.crossOriginIsolated,
         sharedArrayBuffer: message.sharedArrayBuffer,
         cores: message.cores,
         backend: message.backend,
+        model: message.model,
+        dtype: message.dtype,
+        device: message.device,
       });
       hideLoading();
       updateEngineUI();
+      // Immediately kick off generation for the queued segment – ensure not stuck at 100%
+      if (state.playback === "buffering") {
+        elements.nowSection.textContent = `Synthesizing [${message.backend || state.backendPreference}]…`;
+      }
     },
     onGenerating(message) {
       const backendLabel = message?.backend || state.activeBackendId || state.backendPreference || "local";
@@ -1599,6 +1739,9 @@ function ttsCallbacks() {
       state.neuralReady = false;
       console.error("[Hear TTS] backend failure", error);
       hideLoading();
+      setPlaybackState("paused");
+      showToast(error.message || "Voice failed to start — try another dtype/model or clear cache");
+      updateEngineUI();
     },
   };
 }
@@ -1624,7 +1767,7 @@ async function probeKokoroWebGpu() {
   if (cached) return cached;
   if (!("gpu" in navigator)) return { ok: false, reason: "unavailable" };
   localStorage.setItem(`${key}:pending`, "true");
-  const candidate = new KokoroWebGPU(ttsCallbacks());
+  const candidate = new KokoroWebGPU(ttsCallbacks(), { dtype: state.kokoroDtype });
   candidate.setEpoch(state.generationEpoch);
   try {
     setNeuralLoading(null, "Safely testing Kokoro WebGPU");
@@ -1683,24 +1826,27 @@ async function createSelectedBackend() {
     console.warn("[Hear TTS] auto backend is disabled – use an explicit engine choice");
     return null;
   }
-  if (state.backendPreference === "kitten") return new KittenWasm(ttsCallbacks());
+  if (state.backendPreference === "kitten") {
+    return new KittenWasm(ttsCallbacks(), { model: state.kittenModel, dtype: state.kittenDtype });
+  }
   if (state.backendPreference === "kokoro") {
+    const opts = { dtype: state.kokoroDtype };
     // Explicit device saved as hearwiki:kokoro-device (wasm/webgpu). WebGPU is
     // crash-prone on Android, so respect the explicit value and only probe
     // when user chose webgpu – and never benchmark automatically.
     if (state.kokoroDevice === "webgpu") {
       if (!supportsWebGPU()) {
         console.warn("[Hear TTS] WebGPU not supported, falling back to WASM");
-        return new KokoroWasm(ttsCallbacks());
+        return new KokoroWasm(ttsCallbacks(), opts);
       }
       // Probe is cached; only runs after explicit selection, not on page load.
       const probe = await probeKokoroWebGpu();
-      if (probe.ok) return probe.backend || new KokoroWebGPU(ttsCallbacks());
+      if (probe.ok) return probe.backend || new KokoroWebGPU(ttsCallbacks(), opts);
       // Probe failed (common on Android) – fallback to WASM with explicit warning.
       console.warn("[Hear TTS] Kokoro WebGPU probe failed – using WASM fallback");
-      return new KokoroWasm(ttsCallbacks());
+      return new KokoroWasm(ttsCallbacks(), opts);
     }
-    return new KokoroWasm(ttsCallbacks());
+    return new KokoroWasm(ttsCallbacks(), opts);
   }
   return null;
 }
@@ -1764,7 +1910,7 @@ function trimNeuralCache() {
 async function generateNeuralText(text, segmentKey = "", priority = 2, epoch = state.generationEpoch) {
   const backend = await ensureNeuralWorker();
   if (!backend) throw new Error("SystemVoiceFallback");
-  const voice = backend.id === "kitten-wasm" ? "Bella" : state.neuralVoice;
+  const voice = backend.id === "kitten-wasm" ? state.kittenVoice : state.neuralVoice;
   const identity = backend.cacheIdentity;
   const cacheKey = await createAudioCacheKey({
     text,
@@ -2022,8 +2168,12 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
       showToast("Tap play once more to start audio.");
     } else if (error.name === "TimeoutError") {
       showToast("Natural voice was reset after taking too long. Press play to retry, or choose System voice.");
+    } else if (error.message && error.message.includes("Kitten") && error.message.includes("invalid expand")) {
+      showToast(error.message);
+    } else if (error.message && error.message.includes("invalid expand")) {
+      showToast("This passage is too long for this Kitten model — try Nano 0.8 default or a shorter sentence.");
     } else {
-      showToast("Natural voice could not start. Press play to retry, or choose System voice.");
+      showToast(error.message ? `Natural voice could not start: ${error.message.slice(0, 120)}` : "Natural voice could not start. Press play to retry, or choose System voice.");
     }
   }
 }
@@ -2752,6 +2902,65 @@ if (elements.kokoroDeviceSelect) {
 if (elements.neuralBackendSelect) {
   // Legacy row kept hidden – no-op
   elements.neuralBackendSelect.addEventListener("change", () => {});
+}
+if (elements.kokoroDtypeSelect) {
+  elements.kokoroDtypeSelect.addEventListener("change", () => {
+    const next = elements.kokoroDtypeSelect.value;
+    if (!KOKORO_DTYPES.includes(next) || next === state.kokoroDtype) return;
+    state.kokoroDtype = next;
+    localStorage.setItem(`${STORAGE_PREFIX}kokoro-dtype`, next);
+    resetNeuralWorker(new Error("Switching Kokoro precision")).catch(() => {});
+    clearNeuralCache();
+    updateEngineUI();
+    showToast(`Kokoro dtype → ${next} — next play refetches`);
+  });
+}
+if (elements.kittenModelSelect) {
+  elements.kittenModelSelect.addEventListener("change", () => {
+    const next = elements.kittenModelSelect.value;
+    if (!KITTEN_MODELS.includes(next) || next === state.kittenModel) return;
+    state.kittenModel = next;
+    localStorage.setItem(`${STORAGE_PREFIX}kitten-model`, next);
+    resetNeuralWorker(new Error("Switching Kitten model")).catch(() => {});
+    clearNeuralCache();
+    updateEngineUI();
+    showToast(`Kitten model → ${next.split("/").pop()} — next play refetches`);
+  });
+}
+if (elements.kittenDtypeSelect) {
+  elements.kittenDtypeSelect.addEventListener("change", () => {
+    const next = elements.kittenDtypeSelect.value;
+    if (!KITTEN_DTYPES.includes(next) || next === state.kittenDtype) return;
+    state.kittenDtype = next;
+    localStorage.setItem(`${STORAGE_PREFIX}kitten-dtype`, next);
+    resetNeuralWorker(new Error("Switching Kitten dtype")).catch(() => {});
+    clearNeuralCache();
+    updateEngineUI();
+    showToast(`Kitten dtype → ${next} — next play refetches`);
+  });
+}
+if (elements.kittenVoiceSelect) {
+  elements.kittenVoiceSelect.addEventListener("change", () => {
+    const next = elements.kittenVoiceSelect.value;
+    if (!KITTEN_VOICES.includes(next) || next === state.kittenVoice) return;
+    state.kittenVoice = next;
+    localStorage.setItem(`${STORAGE_PREFIX}kitten-voice`, next);
+    // Voices share same model weights (style vectors) – no need to reset worker, just clear cache for new voice
+    clearNeuralCache();
+    updateEngineUI();
+    showToast(`Kitten voice → ${next}`);
+    if (state.engine === "neural" && state.playback === "playing") {
+      const targetWord = currentWordPosition();
+      playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
+    }
+  });
+}
+if (elements.clearAudioCache) elements.clearAudioCache.addEventListener("click", handleClearAudioCache);
+if (elements.clearAllData) elements.clearAllData.addEventListener("click", handleClearAllData);
+// Refresh storage label when sheet opens (cache count may have changed)
+if (elements.voiceSheet) {
+  elements.voiceSheet.addEventListener("toggle", () => refreshStorageLabel());
+  elements.voiceButton.addEventListener("click", () => setTimeout(refreshStorageLabel, 50));
 }
 elements.voiceSelect.addEventListener("change", () => {
   state.selectedVoice = state.voices.find((voice) => voice.voiceURI === elements.voiceSelect.value) || state.selectedVoice;

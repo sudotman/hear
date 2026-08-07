@@ -47,6 +47,36 @@ export async function putCachedAudio({ key, blob, duration, createdAt = Date.now
   await requestResult(transaction.objectStore(STORE_NAME).put({ key, blob, duration, createdAt }));
 }
 
+export async function clearTtsCache() {
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  await requestResult(transaction.objectStore(STORE_NAME).clear());
+}
+
+export async function deleteTtsDatabase() {
+  if (databasePromise) {
+    try {
+      const db = await databasePromise;
+      db.close();
+    } catch {}
+    databasePromise = null;
+  }
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => resolve();
+  });
+}
+
+export async function getTtsCacheCount() {
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, "readonly");
+  const store = transaction.objectStore(STORE_NAME);
+  if ("count" in store) return requestResult(store.count());
+  return requestResult(store.getAllKeys()).then((keys) => keys.length);
+}
+
 export async function requestPersistentStorage() {
   if (!navigator.storage?.persist) return false;
   try {

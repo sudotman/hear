@@ -53,7 +53,7 @@ async function initialize(config = backend) {
   initialization = (async () => {
     postProgress({ status: "starting", file: "", progress: null });
     if (backend.id === "kitten-wasm") {
-      runtime = new KittenRuntime({ onProgress: postProgress });
+      runtime = new KittenRuntime({ onProgress: postProgress, model: backend.model, dtype: backend.dtype });
       await runtime.load();
     } else {
       const { KokoroTTS } = await import("kokoro-js");

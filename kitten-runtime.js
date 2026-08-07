@@ -4,7 +4,8 @@ import wasmModuleUrl from "onnxruntime-web/ort-wasm-simd-threaded.mjs?url";
 import { phonemize } from "phonemizer";
 
 const SAMPLE_RATE = 24_000;
-const MODEL_ROOT = "https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX/resolve/main";
+const DEFAULT_MODEL_ROOT = "https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX/resolve/main";
+const DEFAULT_MODEL_ID = "onnx-community/KittenTTS-Nano-v0.8-ONNX";
 const SYMBOLS = [
   "$",
   ...';:,.!?¡¿—…"«» ',
@@ -20,7 +21,14 @@ function basic_english_tokenize(text) {
 function tokenize(phonemes) {
   const tokens = [...phonemes].flatMap((character) => SYMBOL_IDS.has(character) ? [SYMBOL_IDS.get(character)] : []);
   // Python reference: [0, ...tokens, 10, 0] where 10 is "…" used as EOS separator.
-  return [0, ...tokens, 10, 0];
+  // Guard against Expand shape errors on mini/micro/nano: voices shape is (400,256) so style index max 399,
+  // and ONNX graph Expand expects seq_len <= 400-510. Truncate to 400 to avoid invalid expand shape on long segments (e.g. 333 chars).
+  const ids = [0, ...tokens, 10, 0];
+  if (ids.length > 400) {
+    // Keep BOS 0, 398 tokens, EOS marker 10,0 -> 400 total, preserving style EOS semantics
+    return [...ids.slice(0, 398), 10, 0];
+  }
+  return ids;
 }
 
 function parseNpy(bytes) {
@@ -48,10 +56,12 @@ async function inflateRaw(bytes) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-async function loadNpzVoices(url) {
+async function loadNpzVoices(url, onProgress) {
+  onProgress?.({ status: "progress", file: "voices.npz", loaded: 0, total: 0, progress: 0 });
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Could not download Kitten voices (${response.status}).`);
   const buffer = await response.arrayBuffer();
+  onProgress?.({ status: "progress", file: "voices.npz", loaded: buffer.byteLength, total: buffer.byteLength, progress: 50 });
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
   let endOffset = -1;
@@ -92,11 +102,15 @@ async function loadNpzVoices(url) {
   return voices;
 }
 
-async function fetchWithProgress(url, onProgress) {
+async function fetchWithProgress(url, onProgress, fileLabel = "onnx/model.onnx") {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Could not download the Kitten model (${response.status}).`);
+  if (!response.ok) throw new Error(`Could not download ${fileLabel} (${response.status}).`);
   const total = Number(response.headers.get("content-length")) || 0;
-  if (!response.body) return response.arrayBuffer();
+  if (!response.body) {
+    const buf = await response.arrayBuffer();
+    onProgress?.({ status: "progress", file: fileLabel, loaded: buf.byteLength, total: buf.byteLength, progress: 100 });
+    return buf;
+  }
   const reader = response.body.getReader();
   const chunks = [];
   let loaded = 0;
@@ -105,7 +119,7 @@ async function fetchWithProgress(url, onProgress) {
     if (done) break;
     chunks.push(value);
     loaded += value.length;
-    onProgress?.({ status: "progress", file: "onnx/model.onnx", loaded, total, progress: total ? (loaded / total) * 100 : null });
+    onProgress?.({ status: "progress", file: fileLabel, loaded, total, progress: total ? (loaded / total) * 100 : null });
   }
   const joined = new Uint8Array(loaded);
   let offset = 0;
@@ -113,12 +127,20 @@ async function fetchWithProgress(url, onProgress) {
     joined.set(chunk, offset);
     offset += chunk.length;
   }
+  // Ensure final 100% is reported
+  onProgress?.({ status: "progress", file: fileLabel, loaded, total: loaded, progress: 100 });
   return joined.buffer;
 }
 
+async function fetchWithProgressAndLabel(url, onProgress, label) {
+  return fetchWithProgress(url, onProgress, label);
+}
+
 export class KittenRuntime {
-  constructor({ onProgress } = {}) {
+  constructor({ onProgress, model } = {}) {
     this.onProgress = onProgress;
+    this.modelId = model || DEFAULT_MODEL_ID;
+    this.modelRoot = `https://huggingface.co/${this.modelId}/resolve/main`;
     this.session = null;
     this.voices = null;
     this.config = null;
@@ -133,15 +155,44 @@ export class KittenRuntime {
       ? Math.max(1, Math.min(4, Math.floor((self.navigator?.hardwareConcurrency || 2) / 2)))
       : 1;
     this.onProgress?.({ status: "starting", file: "", progress: null });
-    const configResponse = await fetch(`${MODEL_ROOT}/kitten_config.json`);
-    if (!configResponse.ok) throw new Error("Could not load the Kitten model configuration.");
-    this.config = await configResponse.json();
-    const [model, voices] = await Promise.all([
-      fetchWithProgress(`${MODEL_ROOT}/onnx/model.onnx`, this.onProgress),
-      loadNpzVoices(`${MODEL_ROOT}/${this.config.voices}`),
-    ]);
+    // Try kitten_config.json first, fallback to config.json for other repos
+    let config = null;
+    let configUrl = `${this.modelRoot}/kitten_config.json`;
+    let configResponse = await fetch(configUrl);
+    if (!configResponse.ok) {
+      configUrl = `${this.modelRoot}/config.json`;
+      configResponse = await fetch(configUrl);
+    }
+    if (!configResponse.ok) throw new Error(`Could not load Kitten config for ${this.modelId} (${configResponse.status}).`);
+    config = await configResponse.json();
+    // Kitten ONNX models use different keys: kitten_config has voices/model_file, config.json may not
+    this.config = {
+      voices: config.voices || "voices.npz",
+      model_file: config.model_file || config.modelFile || "onnx/model.onnx",
+      voice_aliases: config.voice_aliases || config.voiceAliases || {},
+      speed_priors: config.speed_priors || config.speedPriors || {},
+    };
+    // Resolve model file path
+    const modelPath = this.config.model_file.startsWith("http") ? this.config.model_file : `${this.modelRoot}/${this.config.model_file}`;
+    const voicesPath = this.config.voices.startsWith("http") ? this.config.voices : `${this.modelRoot}/${this.config.voices}`;
+    // Report voices download too
+    const voicesProgress = (status, file, loaded, total) => this.onProgress?.({ status, file, loaded, total, progress: total ? (loaded / total) * 100 : null });
+    const voicesFetch = (async () => {
+      voicesProgress("progress", "voices.npz", 0, 0);
+      const v = await loadNpzVoices(voicesPath, this.onProgress);
+      this.onProgress?.({ status: "progress", file: "voices.npz", loaded: 1, total: 1, progress: 100 });
+      return v;
+    })();
+    const modelFetch = fetchWithProgress(modelPath, this.onProgress, "onnx/model.onnx").catch(async () => {
+        const alt = `${this.modelRoot}/onnx/model.onnx`;
+        if (alt === modelPath) throw new Error(`Could not download Kitten model at ${modelPath}`);
+        return fetchWithProgress(alt, this.onProgress, "onnx/model.onnx");
+      });
+    const [model, voices] = await Promise.all([modelFetch, voicesFetch]);
     this.voices = voices;
+    this.onProgress?.({ status: "loading", file: "onnx/model.onnx", progress: null });
     this.session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"] });
+    this.onProgress?.({ status: "ready", file: "", progress: 100 });
   }
 
   async generate(text, { voice = "Bella", speed = 1 } = {}) {
@@ -161,11 +212,20 @@ export class KittenRuntime {
     const styleSize = voiceData.shape[1];
     const style = voiceData.data.slice(styleIndex * styleSize, (styleIndex + 1) * styleSize);
     const adjustedSpeed = speed * (this.config.speed_priors?.[voiceId] || 1);
-    const result = await this.session.run({
-      input_ids: new ort.Tensor("int64", BigInt64Array.from(inputIds, BigInt), [1, inputIds.length]),
-      style: new ort.Tensor("float32", style, [1, styleSize]),
-      speed: new ort.Tensor("float32", new Float32Array([adjustedSpeed]), [1]),
-    });
+    let result;
+    try {
+      result = await this.session.run({
+        input_ids: new ort.Tensor("int64", BigInt64Array.from(inputIds, BigInt), [1, inputIds.length]),
+        style: new ort.Tensor("float32", style, [1, styleSize]),
+        speed: new ort.Tensor("float32", new Float32Array([adjustedSpeed]), [1]),
+      });
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (msg.includes("Expand") || msg.includes("invalid expand") || msg.includes("ERROR_CODE: 2")) {
+        throw new Error(`Kitten ${this.modelId} failed: invalid expand shape for ${inputIds.length} tokens (text ${text.length} chars). Try Nano 0.8 default, shorter passage, or different voice. Original: ${msg}`);
+      }
+      throw err;
+    }
     const waveform = result[this.session.outputNames[0]].data;
     if (!waveform.length || !Number.isFinite(waveform[0])) throw new Error("Kitten produced invalid audio on this device.");
     // Python always slices last 5000 samples (tail noise)

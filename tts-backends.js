@@ -155,43 +155,63 @@ class WorkerTtsBackend {
   }
 }
 
+export const KOKORO_DTYPE_OPTIONS = ["fp32", "fp16", "q8", "q8f16", "q4", "q4f16", "uint8", "uint8f16"];
+export const KITTEN_DTYPE_OPTIONS = ["fp32", "fp16", "q8", "q4"];
+export const KITTEN_MODEL_OPTIONS = [
+  "onnx-community/KittenTTS-Nano-v0.8-ONNX",
+  "KittenML/kitten-tts-mini-0.8",
+  "KittenML/kitten-tts-micro-0.8",
+  "onnx-community/kitten-tts-nano-0.1-ONNX",
+];
+
+function kokoroLabel(device, dtype) {
+  return `Kokoro ${device === "webgpu" ? "WebGPU" : "WASM"} ${dtype}`;
+}
+
 export class KokoroWebGPU extends WorkerTtsBackend {
-  constructor(callbacks) {
+  constructor(callbacks, opts = {}) {
+    const dtype = KOKORO_DTYPE_OPTIONS.includes(opts.dtype) ? opts.dtype : "fp32";
+    const model = opts.model || "onnx-community/Kokoro-82M-v1.0-ONNX";
     super({
       id: "kokoro-webgpu",
-      label: "Kokoro WebGPU",
-      model: "onnx-community/Kokoro-82M-v1.0-ONNX",
+      label: kokoroLabel("webgpu", dtype),
+      model,
       version: "1.0",
       device: "webgpu",
-      dtype: "fp32",
+      dtype,
       defaultVoice: "af_heart",
     }, callbacks);
   }
 }
 
 export class KokoroWasm extends WorkerTtsBackend {
-  constructor(callbacks) {
+  constructor(callbacks, opts = {}) {
+    const dtype = KOKORO_DTYPE_OPTIONS.includes(opts.dtype) ? opts.dtype : "q8";
+    const model = opts.model || "onnx-community/Kokoro-82M-v1.0-ONNX";
     super({
       id: "kokoro-wasm",
-      label: "Kokoro WASM",
-      model: "onnx-community/Kokoro-82M-v1.0-ONNX",
+      label: kokoroLabel("wasm", dtype),
+      model,
       version: "1.0",
       device: "wasm",
-      dtype: "q8",
+      dtype,
       defaultVoice: "af_heart",
     }, callbacks);
   }
 }
 
 export class KittenWasm extends WorkerTtsBackend {
-  constructor(callbacks) {
+  constructor(callbacks, opts = {}) {
+    const dtype = KITTEN_DTYPE_OPTIONS.includes(opts.dtype) ? opts.dtype : "fp32";
+    const model = KITTEN_MODEL_OPTIONS.includes(opts.model) ? opts.model : "onnx-community/KittenTTS-Nano-v0.8-ONNX";
+    const short = model.split("/").pop();
     super({
       id: "kitten-wasm",
-      label: "Kitten WASM",
-      model: "onnx-community/KittenTTS-Nano-v0.8-ONNX",
-      version: "0.8",
+      label: `Kitten ${short} ${dtype}`,
+      model,
+      version: model.includes("0.1") ? "0.1" : model.includes("int8") ? "0.8-int8" : "0.8",
       device: "wasm",
-      dtype: "fp32",
+      dtype,
       defaultVoice: "Bella",
     }, callbacks);
   }
