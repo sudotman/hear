@@ -237,6 +237,27 @@ export class KittenRuntime {
     const voiceId = this.config.voice_aliases?.[voice] || voice;
     const voiceData = this.voices[voiceId];
     if (!voiceData) throw new Error(`Kitten voice “${voice}” is unavailable.`);
+    // Convert explicit line breaks (preserved by library.js for verse/<br>) into punctuation pauses
+    // so Kitten keeps Python parity (single EspeakBackend call) but renders line breaks as audible pauses.
+    // Double newline -> sentence break (period), single -> comma-like pause.
+    let normalizedText = String(text || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
+    if (normalizedText.includes("\n")) {
+      normalizedText = normalizedText
+        .replace(/\n{3,}/g, "\n\n")
+        // Use placeholder to avoid double conversion of the newline left after paragraph break
+        .replace(/\n\n/g, " __PARA__ ")
+        // If line already ends with punctuation, keep that pause instead of adding a period
+        .replace(/([.!?;:,…])\s*\n/g, "$1 ")
+        .replace(/\n/g, " . ")
+        .replace(/__PARA__/g, " . ")
+        // Collapse duplicate periods (e.g. ".." -> ".")
+        .replace(/\.\s*\./g, ".")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      text = normalizedText;
+    }
     // Exact Python parity: single espeak call + basic_english_tokenize + TextCleaner
     const phonemesList = await new Promise((resolve, reject) => {
       // phonemizer espeak backend – preserve punctuation & stress like Python's EspeakBackend

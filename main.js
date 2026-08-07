@@ -935,7 +935,7 @@ function createSpeechChunks(article) {
   const chunks = [];
   let cumulativeWords = 0;
 
-  const addChunk = (text, block) => {
+  const addChunk = (text, block, extra = {}) => {
     const count = wordCount(text);
     chunks.push({
       text,
@@ -944,6 +944,7 @@ function createSpeechChunks(article) {
       sectionId: block?.sectionId || "introduction",
       startWord: cumulativeWords,
       wordCount: count,
+      ...extra,
     });
     cumulativeWords += count;
   };
@@ -954,8 +955,20 @@ function createSpeechChunks(article) {
       addChunk(`${block.text}.`, block);
       continue;
     }
-    for (const sentence of segmentSentences(block.text, article.lang)) {
-      addChunk(sentence, block);
+    // Respect explicit line breaks (verse/poetry) preserved by library.js — each line becomes its own chunk sequence
+    const linePieces = block.text.includes("\n") ? block.text.split(/\n+/).map((part) => part.trim()).filter(Boolean) : [block.text];
+    for (let pieceIndex = 0; pieceIndex < linePieces.length; pieceIndex += 1) {
+      let piece = linePieces[pieceIndex];
+      const isLineBreakPiece = pieceIndex > 0;
+      // Ensure a pause between verse lines that lack terminal punctuation — period gives a sentence-level break instead of same-breath comma
+      if (pieceIndex < linePieces.length - 1 && !/[.!?;:,…—]$/.test(piece)) {
+        piece = `${piece} .`;
+      }
+      const sentences = segmentSentences(piece, article.lang);
+      for (let s = 0; s < sentences.length; s += 1) {
+        const isFirstSentenceOfPiece = s === 0;
+        addChunk(sentences[s], block, isLineBreakPiece && isFirstSentenceOfPiece ? { lineBreak: true } : {});
+      }
     }
   }
 
@@ -995,6 +1008,15 @@ function createNeuralSegments(chunks) {
   };
 
   chunks.forEach((chunk, chunkIndex) => {
+    // Force a segment break at explicit line breaks so Kitten inserts inter-segment silence instead of same-breath concatenation
+    if (chunk.lineBreak && current) {
+      commit();
+    }
+    // Respect paragraph boundaries — don't tack next block's first sentence onto previous paragraph's tail unless current is still very short
+    if (current && chunk.blockId !== current.blockId && current.text.length >= 80) {
+      // Commit at blockId change to avoid “tacked on” quoted dialogue from next <p> (e.g. “…to bed.” + “Would not a story…?”)
+      commit();
+    }
     let remaining = chunk.text.trim();
     let remainingStartWord = chunk.startWord;
     while (remaining) {
@@ -1015,18 +1037,24 @@ function createNeuralSegments(chunks) {
         continue;
       }
 
-      let cut = remaining.lastIndexOf(" ", available);
-      if (cut < Math.max(24, available - 45)) cut = remaining.indexOf(" ", available);
-      if (cut < 0) cut = Math.min(available, remaining.length);
-      const piece = remaining.slice(0, cut).trim();
-      if (!piece) {
+      // Be smart: never start next segment mid-sentence. Keep whole chunk intact and move it to next segment.
+      // Only slice inside chunk if chunk itself exceeds maxCharacters (long sentence already split by splitLongText, but guard anyway).
+      if (remaining.length > maxCharacters) {
+        let cut = remaining.lastIndexOf(" ", maxCharacters);
+        if (cut < Math.max(24, maxCharacters - 45)) cut = remaining.indexOf(" ", maxCharacters);
+        if (cut < 0) cut = Math.min(maxCharacters, remaining.length);
+        const piece = remaining.slice(0, cut).trim();
+        if (!piece) {
+          commit();
+          continue;
+        }
+        append(piece, chunk, chunkIndex, remainingStartWord);
+        remainingStartWord += wordCount(piece);
+        remaining = remaining.slice(cut).trim();
         commit();
-        continue;
+      } else {
+        commit();
       }
-      append(piece, chunk, chunkIndex, remainingStartWord);
-      remainingStartWord += wordCount(piece);
-      remaining = remaining.slice(cut).trim();
-      commit();
     }
   });
 

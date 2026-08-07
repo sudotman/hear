@@ -42,6 +42,36 @@ function cleanPublicationText(value) {
     .trim();
 }
 
+function cleanPublicationTextPreserveLines(value) {
+  const normalized = String(value || "")
+    .replace(/\u00ad/g, "")
+    .replace(/\[(?:\d+|note\s+\d+|return)\]/gi, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  // Split on newlines, clean each segment, then rejoin preserving single vs double breaks.
+  const parts = normalized.split(/(\n+)/);
+  return parts
+    .map((part) => {
+      if (/^\n+$/.test(part)) {
+        // collapse 3+ newlines to double, keep 1-2 as-is
+        return part.length >= 3 ? "\n\n" : part;
+      }
+      const cleaned = cleanPublicationText(part);
+      return cleaned;
+    })
+    .join("")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function elementTextWithLineBreaks(element) {
+  const clone = element.cloneNode(true);
+  clone.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
+  // Preserve block-level separators that DOMParser may flatten: some EPUBs use <span> with line breaks
+  return clone.textContent || "";
+}
+
 function textFromMarkup(value) {
   const text = String(value || "");
   if (!/[<>]/.test(text)) return cleanPublicationText(text);
@@ -266,7 +296,8 @@ function extractEpubChapter(files, item, title, chapterNumber, titles) {
         .filter(Boolean);
       value = cells.join(cells.length > 1 ? ". " : "");
     } else {
-      value = cleanPublicationText(element.textContent);
+      const raw = elementTextWithLineBreaks(element);
+      value = raw.includes("\n") ? cleanPublicationTextPreserveLines(raw) : cleanPublicationText(raw);
     }
     if (!value || (/^(cover|title page|contents|table of contents|copyright)$/i.test(value) && candidates.length < 8)) continue;
     if (/^H[1-3]$/.test(tagName)) {
@@ -443,27 +474,38 @@ function extractGutenbergHtml(html) {
 
   for (const element of candidates) {
     if (element.tagName === "LI" && element.querySelector("li")) continue;
-    const text = cleanPublicationText(element.textContent);
+    const rawForBreaks = elementTextWithLineBreaks(element);
+    const text = rawForBreaks.includes("\n") ? cleanPublicationTextPreserveLines(rawForBreaks) : cleanPublicationText(rawForBreaks);
     if (!text) continue;
     if (/\*\*\*\s*(?:start|end) of (?:the|this) project gutenberg/i.test(text)) continue;
     if (/^(?:project gutenberg|produced by|transcriber's note|credits:|ebook no\.)/i.test(text)) continue;
 
     const isHeading = /^H[1-4]$/.test(element.tagName);
-    if (isHeading && (element.tagName === "H1" || element.tagName === "H2" || chapterHeading(text))) {
-      chapterCount += 1;
-      section = text;
-      sectionId = `chapter-${chapterCount}`;
-      blocks.push({ id: sectionId, type: "h2", text, section, sectionId });
-    } else if (isHeading) {
-      blocks.push({ id: `block-${blocks.length}`, type: "h3", text, section, sectionId });
-    } else if (text.length >= 12) {
-      blocks.push({
-        id: `block-${blocks.length}`,
-        type: element.tagName === "LI" ? "li" : "p",
-        text,
-        section,
-        sectionId,
-      });
+    // Split blocks that contain explicit line breaks (verse/prose with <br>) into separate lines
+    const lineParts = text.includes("\n") ? text.split(/\n+/).map((part) => part.trim()).filter(Boolean) : [text];
+    for (let partIndex = 0; partIndex < lineParts.length; partIndex += 1) {
+      let part = lineParts[partIndex];
+      const isLastPart = partIndex === lineParts.length - 1;
+      // Add pause punctuation for verse lines that lack terminal punctuation — period for audible break
+      if (!isLastPart && !isHeading && !/[.!?;:,…—]$/.test(part)) {
+        part = `${part} .`;
+      }
+      if (isHeading && (element.tagName === "H1" || element.tagName === "H2" || chapterHeading(part))) {
+        chapterCount += 1;
+        section = part;
+        sectionId = `chapter-${chapterCount}`;
+        blocks.push({ id: sectionId, type: "h2", text: part, section, sectionId });
+      } else if (isHeading) {
+        blocks.push({ id: `block-${blocks.length}`, type: "h3", text: part, section, sectionId });
+      } else if (part.length >= 12 || lineParts.length > 1) {
+        blocks.push({
+          id: `block-${blocks.length}`,
+          type: element.tagName === "LI" ? "li" : "p",
+          text: part,
+          section,
+          sectionId,
+        });
+      }
     }
   }
   const narrativeStart = blocks.findIndex((block) => block.type === "h2" && chapterHeading(block.text));
@@ -475,12 +517,40 @@ function extractGutenbergText(text) {
     .replace(/^.*?\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG EBOOK[^\n]*\*\*\*/is, "")
     .replace(/\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG EBOOK[\s\S]*$/i, "")
     .trim();
-  const paragraphs = content.split(/\n\s*\n+/).map(cleanPublicationText).filter(Boolean);
+  const paragraphs = content.split(/\n\s*\n+/);
   const blocks = [];
   let section = "Opening";
   let sectionId = "chapter-1";
   let chapterCount = 0;
-  for (const paragraph of paragraphs) {
+  for (const rawParagraph of paragraphs) {
+    const trimmed = rawParagraph.trim();
+    if (!trimmed) continue;
+    // Detect verse: multiple short lines separated by single newlines
+    const lines = trimmed.split(/\n/).map((line) => cleanPublicationText(line)).filter(Boolean);
+    if (lines.length > 1) {
+      const avgLen = lines.reduce((sum, line) => sum + line.length, 0) / lines.length;
+      const isVerse = avgLen < 80 && lines.length >= 2;
+      if (isVerse) {
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          let line = lines[lineIndex];
+          const isLastLine = lineIndex === lines.length - 1;
+          if (!isLastLine && !/[.!?;:,…—]$/.test(line)) {
+            line = `${line} .`;
+          }
+          if (line.replace(/,\s*$/, "").length < 120 && chapterHeading(line.replace(/,\s*$/, ""))) {
+            chapterCount += 1;
+            section = line;
+            sectionId = `chapter-${chapterCount}`;
+            blocks.push({ id: sectionId, type: "h2", text: line, section, sectionId });
+          } else if (line.length >= 2) {
+            blocks.push({ id: `block-${blocks.length}`, type: "p", text: line, section, sectionId });
+          }
+        }
+        continue;
+      }
+    }
+    const paragraph = cleanPublicationText(trimmed);
+    if (!paragraph) continue;
     if (paragraph.length < 120 && chapterHeading(paragraph)) {
       chapterCount += 1;
       section = paragraph;
