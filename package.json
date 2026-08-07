@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev": "node scripts/patch-phonemizer.js && vite",
+    "build": "node scripts/patch-phonemizer.js && vite build",
+    "preview": "vite preview",
+    "postinstall": "node scripts/patch-phonemizer.js"
   },
   "devDependencies": {
     "vite": "^7.0.6"

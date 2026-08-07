@@ -3,6 +3,25 @@ import wasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import wasmModuleUrl from "onnxruntime-web/ort-wasm-simd-threaded.mjs?url";
 import { phonemize } from "phonemizer";
 
+// WebKit compatibility: ReadableStream async iteration is missing on
+// Safari / iOS Safari < ~16 despite supporting ReadableStream. Phonemizer's
+// bundled espeak-ng loader uses `for await (const c of stream)` which throws
+// `TypeError: undefined is not a function` on WebKit. Polyfill if needed.
+if (typeof ReadableStream !== "undefined" && !ReadableStream.prototype[Symbol.asyncIterator]) {
+  ReadableStream.prototype[Symbol.asyncIterator] = async function* () {
+    const reader = this.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+}
+
 const SAMPLE_RATE = 24_000;
 const DEFAULT_MODEL_ROOT = "https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX/resolve/main";
 const DEFAULT_MODEL_ID = "onnx-community/KittenTTS-Nano-v0.8-ONNX";
@@ -55,8 +74,17 @@ function parseNpy(bytes) {
 }
 
 async function inflateRaw(bytes) {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  // Prefer native DecompressionStream (Safari 16.4+), fallback to fflate for WebKit without it
+  if (typeof DecompressionStream !== "undefined") {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {}
+  }
+  // Fallback: fflate raw inflate (voices.npz per-file deflate-raw)
+  const { inflateSync } = await import("fflate");
+  // fflate inflateSync expects raw deflate bytes
+  return inflateSync(bytes);
 }
 
 async function loadNpzVoices(url, onProgress) {
@@ -175,6 +203,12 @@ export class KittenRuntime {
       voice_aliases: config.voice_aliases || config.voiceAliases || {},
       speed_priors: config.speed_priors || config.speedPriors || {},
     };
+    // HF's kitten_config.json for Nano 0.8 points to "kitten_tts_nano_v0_8.onnx"
+    // at the repo root, but the actual XET asset lives at "onnx/model.onnx".
+    // Normalize to avoid the 404 that Safari logs as a failed resource.
+    if (this.config.model_file === "kitten_tts_nano_v0_8.onnx") {
+      this.config.model_file = "onnx/model.onnx";
+    }
     // Resolve model file path
     const modelPath = this.config.model_file.startsWith("http") ? this.config.model_file : `${this.modelRoot}/${this.config.model_file}`;
     const voicesPath = this.config.voices.startsWith("http") ? this.config.voices : `${this.modelRoot}/${this.config.voices}`;
