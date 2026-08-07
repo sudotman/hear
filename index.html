@@ -314,9 +314,9 @@
         </div>
       </div>
 
-      <div class="setting-row voice-select-row" id="neural-backend-row">
+      <div class="setting-row voice-select-row" id="neural-backend-row" hidden>
         <label for="neural-backend-select">
-          <span>Compute backend</span>
+          <span>Compute backend (legacy)</span>
           <small>WASM is stable · WebGPU is experimental</small>
         </label>
         <div class="voice-choice">
@@ -325,6 +325,27 @@
             <option value="webgpu">WebGPU · experimental (fast)</option>
           </select>
           <p class="voice-traits" id="neural-backend-note">Engine: WASM · Single-threaded, most stable.</p>
+        </div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kokoro-device-row" hidden>
+        <label for="kokoro-device-select">
+          <span>Kokoro compute</span>
+          <small id="kokoro-device-help">WASM is stable · WebGPU is experimental</small>
+        </label>
+        <div class="voice-choice">
+          <select id="kokoro-device-select">
+            <option value="wasm">WASM · stable (q8)</option>
+            <option value="webgpu">WebGPU · experimental (fp32, fast)</option>
+          </select>
+          <p class="voice-traits" id="kokoro-device-note">Explicit, saved per device.</p>
+        </div>
+      </div>
+
+      <div class="setting-row" id="active-model-row">
+        <div class="setting-label">
+          <span>Active model</span>
+          <small id="active-model-label">System voice · no download</small>
         </div>
       </div>
 

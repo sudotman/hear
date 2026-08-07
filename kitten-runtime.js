@@ -13,23 +13,14 @@ const SYMBOLS = [
 ];
 const SYMBOL_IDS = new Map(SYMBOLS.map((symbol, index) => [symbol, index]));
 
-function hashString(value) {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
+function basic_english_tokenize(text) {
+  return text.match(/\w+|[^\w\s]/g) || [];
 }
 
 function tokenize(phonemes) {
   const tokens = [...phonemes].flatMap((character) => SYMBOL_IDS.has(character) ? [SYMBOL_IDS.get(character)] : []);
-  // Fix garbled KittenTTS (Windows/iOS/Mac): old code returned [0, ...tokens, 10, 0]
-  // where 10 is "…" (ellipsis), not EOS – it injected a spurious phoneme that
-  // made every utterance harsh/garbled. Correct is [0, ...tokens, 0].
-  const ids = [0, ...tokens, 0];
-  if (ids.length > 510) return [...ids.slice(0, 509), 0];
-  return ids;
+  // Python reference: [0, ...tokens, 10, 0] where 10 is "…" used as EOS separator.
+  return [0, ...tokens, 10, 0];
 }
 
 function parseNpy(bytes) {
@@ -158,13 +149,15 @@ export class KittenRuntime {
     const voiceId = this.config.voice_aliases?.[voice] || voice;
     const voiceData = this.voices[voiceId];
     if (!voiceData) throw new Error(`Kitten voice “${voice}” is unavailable.`);
-    const phonemeParts = await Promise.all(text.split(/([;:,.!?¡¿—…"«»()\[\]{}]+)/g).map(async (part, index) => {
-      if (index % 2 === 1) return part;
-      return (await phonemize(part, "en-us")).join(" ");
-    }));
-    const inputIds = tokenize(phonemeParts.join(""));
-    if (inputIds.length < 4) throw new Error("This passage is too short to synthesize.");
-    const styleIndex = hashString(`${voiceId}:${text.slice(0, 64)}`) % voiceData.shape[0];
+    // Exact Python parity: single espeak call + basic_english_tokenize + TextCleaner
+    const phonemesList = await new Promise((resolve, reject) => {
+      // phonemizer espeak backend – preserve punctuation & stress like Python's EspeakBackend
+      phonemize(text, "en-us").then(resolve, reject);
+    });
+    const rawPhonemes = Array.isArray(phonemesList) ? phonemesList.join(" ") : String(phonemesList);
+    const phonemes = basic_english_tokenize(rawPhonemes).join(" ");
+    const inputIds = tokenize(phonemes);
+    const styleIndex = Math.min(text.length, voiceData.shape[0] - 1);
     const styleSize = voiceData.shape[1];
     const style = voiceData.data.slice(styleIndex * styleSize, (styleIndex + 1) * styleSize);
     const adjustedSpeed = speed * (this.config.speed_priors?.[voiceId] || 1);
@@ -175,15 +168,9 @@ export class KittenRuntime {
     });
     const waveform = result[this.session.outputNames[0]].data;
     if (!waveform.length || !Number.isFinite(waveform[0])) throw new Error("Kitten produced invalid audio on this device.");
-    if (waveform.length > SAMPLE_RATE * 0.6) {
-      let tailSilence = 0;
-      for (let i = waveform.length - 1; i >= Math.max(0, waveform.length - 1200); i -= 1) {
-        if (Math.abs(waveform[i]) < 0.005) tailSilence += 1;
-        else break;
-      }
-      if (tailSilence > 600) return { audio: waveform.slice(0, waveform.length - tailSilence), samplingRate: SAMPLE_RATE };
-    }
-    return { audio: waveform, samplingRate: SAMPLE_RATE };
+    // Python always slices last 5000 samples (tail noise)
+    const trimmed = waveform.length > 5000 ? waveform.slice(0, waveform.length - 5000) : waveform;
+    return { audio: trimmed, samplingRate: SAMPLE_RATE };
   }
 
   async dispose() {

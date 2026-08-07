@@ -98,6 +98,10 @@ const elements = {
   neuralBackendSelect: $("#neural-backend-select"),
   neuralBackendRow: $("#neural-backend-row"),
   neuralBackendNote: $("#neural-backend-note"),
+  kokoroDeviceSelect: $("#kokoro-device-select"),
+  kokoroDeviceRow: $("#kokoro-device-row"),
+  kokoroDeviceNote: $("#kokoro-device-note"),
+  activeModelLabel: $("#active-model-label"),
   voiceNote: $("#voice-note"),
   rateRange: $("#rate-range"),
   rateOutput: $("#rate-output"),
@@ -231,6 +235,12 @@ const rawBackendPreference = localStorage.getItem(`${STORAGE_PREFIX}tts-backend`
 // Migrate legacy "auto" (unreliable WebGPU benchmark) to explicit choice.
 // Fresh installs default to "system" (instant, no download) per #4.
 const initialBackendPreference = rawBackendPreference === "auto" ? "system" : rawBackendPreference || "system";
+const rawKokoroDevice = localStorage.getItem(`${STORAGE_PREFIX}kokoro-device`);
+const initialKokoroDevice = rawKokoroDevice === "webgpu" ? "webgpu" : "wasm";
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+function supportsWebGPU() {
+  return typeof navigator !== "undefined" && "gpu" in navigator;
+}
 const state = {
   article: null,
   chunks: [],
@@ -238,8 +248,11 @@ const state = {
   voices: [],
   selectedVoice: null,
   backendPreference: initialBackendPreference,
+  kokoroDevice: initialKokoroDevice,
   engine: initialBackendPreference === "system" ? "system" : "neural",
   activeBackendId: null,
+  activeBackendModel: null,
+  activeBackendDevice: null,
   ttsBackend: null,
   generationEpoch: 0,
   rtfSamples: [],
@@ -1170,9 +1183,42 @@ function updateEngineUI() {
   }
   // Auto is deprecated – hide it and make the choice explicit.
   if (elements.autoEngine) elements.autoEngine.hidden = true;
-  // Leftover from pre-overhaul wasm/webgpu toggle – hidden, Kokoro now handles WebGPU safely.
   if (elements.neuralBackendRow) elements.neuralBackendRow.hidden = true;
   const isNeural = state.engine === "neural";
+  // Explicit Kokoro device selector – only when Kokoro is the saved choice.
+  if (elements.kokoroDeviceRow) {
+    const showKokoroDevice = state.backendPreference === "kokoro";
+    elements.kokoroDeviceRow.hidden = !showKokoroDevice;
+    if (elements.kokoroDeviceSelect) {
+      elements.kokoroDeviceSelect.value = state.kokoroDevice;
+      const webgpuOpt = elements.kokoroDeviceSelect.querySelector('option[value="webgpu"]');
+      if (webgpuOpt) {
+        webgpuOpt.disabled = !supportsWebGPU();
+        webgpuOpt.textContent = supportsWebGPU() ? "WebGPU · experimental (fp32)" : "WebGPU · not supported";
+      }
+    }
+    if (elements.kokoroDeviceNote) {
+      const devLabel = state.kokoroDevice === "webgpu" ? "WebGPU fp32" : "WASM q8";
+      let note = `Compute: ${devLabel} · saved as hearwiki:kokoro-device.`;
+      if (IS_ANDROID && state.kokoroDevice === "webgpu") note += " WebGPU often crashes on Android – WASM recommended.";
+      if (!supportsWebGPU() && state.kokoroDevice === "webgpu") note += " WebGPU not detected; will fallback to WASM.";
+      elements.kokoroDeviceNote.textContent = note;
+    }
+    if (elements.kokoroDeviceSelect) elements.kokoroDeviceSelect.disabled = false;
+  }
+  // Exact active model label – persisted and crash-safe
+  if (elements.activeModelLabel) {
+    let label = "";
+    if (!isNeural) label = "System voice · instant · no download";
+    else if (state.activeBackendId === "kitten-wasm") label = "Kitten Nano 0.8 · onnx-community/KittenTTS-Nano-v0.8-ONNX · fp32 · WASM";
+    else if (state.activeBackendId === "kokoro-webgpu") label = "Kokoro 82M v1.0 · onnx-community/Kokoro-82M-v1.0-ONNX · fp32 · WebGPU";
+    else if (state.activeBackendId === "kokoro-wasm") label = "Kokoro 82M v1.0 · onnx-community/Kokoro-82M-v1.0-ONNX · q8 · WASM";
+    else if (state.backendPreference === "kitten") label = `Kitten Nano 0.8 · ${state.kokoroDevice === "webgpu" ? "fp32 · WASM (Kitten is WASM-only)" : "fp32 · WASM"} · will load on play`;
+    else if (state.backendPreference === "kokoro") label = `Kokoro 82M v1.0 · ${state.kokoroDevice === "webgpu" ? "fp32 · WebGPU (explicit)" : "q8 · WASM (explicit)"} · will load on play`;
+    else label = "System voice · explicit choice saved";
+    elements.activeModelLabel.textContent = label;
+    elements.activeModelLabel.title = label;
+  }
   for (const [choice, element] of [["auto", elements.autoEngine], ["kokoro", elements.kokoroEngine], ["kitten", elements.kittenEngine], ["system", elements.systemEngine]]) {
     if (!element || element.hidden) continue;
     element.setAttribute("aria-pressed", String(state.backendPreference === choice));
@@ -1633,19 +1679,27 @@ async function chooseAutomaticBackend() {
 }
 
 async function createSelectedBackend() {
-  // "auto" is deprecated – it previously benchmarked WebGPU (crashes on Android)
-  // and downloaded WASM models without consent. Treat it as an explicit error
-  // and fall back to the no-download system voice; user must pick kitten/kokoro.
   if (state.backendPreference === "auto") {
     console.warn("[Hear TTS] auto backend is disabled – use an explicit engine choice");
     return null;
   }
   if (state.backendPreference === "kitten") return new KittenWasm(ttsCallbacks());
   if (state.backendPreference === "kokoro") {
-    // Kokoro WebGPU is still crash-prone on some Android WebViews; probe is
-    // cached and only runs after explicit user selection, not on page load.
-    const probe = await probeKokoroWebGpu();
-    if (probe.ok && probe.rtf < 0.8) return probe.backend || new KokoroWebGPU(ttsCallbacks());
+    // Explicit device saved as hearwiki:kokoro-device (wasm/webgpu). WebGPU is
+    // crash-prone on Android, so respect the explicit value and only probe
+    // when user chose webgpu – and never benchmark automatically.
+    if (state.kokoroDevice === "webgpu") {
+      if (!supportsWebGPU()) {
+        console.warn("[Hear TTS] WebGPU not supported, falling back to WASM");
+        return new KokoroWasm(ttsCallbacks());
+      }
+      // Probe is cached; only runs after explicit selection, not on page load.
+      const probe = await probeKokoroWebGpu();
+      if (probe.ok) return probe.backend || new KokoroWebGPU(ttsCallbacks());
+      // Probe failed (common on Android) – fallback to WASM with explicit warning.
+      console.warn("[Hear TTS] Kokoro WebGPU probe failed – using WASM fallback");
+      return new KokoroWasm(ttsCallbacks());
+    }
     return new KokoroWasm(ttsCallbacks());
   }
   return null;
@@ -1687,6 +1741,8 @@ async function ensureNeuralWorker({ background = false } = {}) {
   }
   state.ttsBackend = backend;
   state.activeBackendId = backend.id;
+  state.activeBackendModel = backend.config?.model || backend.model || "";
+  state.activeBackendDevice = backend.config?.device || backend.device || (backend.id.includes("webgpu") ? "webgpu" : "wasm");
   backend.setEpoch(state.generationEpoch);
   await backend.load();
   state.neuralReady = true;
@@ -2676,23 +2732,26 @@ elements.naturalVoiceSelect.addEventListener("change", async () => {
     playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
   }
 });
-if (elements.neuralBackendSelect) {
-  elements.neuralBackendSelect.addEventListener("change", () => {
-    const next = elements.neuralBackendSelect.value === "webgpu" ? "webgpu" : "wasm";
-    if (next === state.neuralBackend) return;
-    if (IS_ANDROID && next === "webgpu" && !confirm("WebGPU is known to crash the stress harness on Android. Continue with WebGPU?")) {
-      elements.neuralBackendSelect.value = state.neuralBackend;
+if (elements.kokoroDeviceSelect) {
+  elements.kokoroDeviceSelect.addEventListener("change", () => {
+    const next = elements.kokoroDeviceSelect.value === "webgpu" ? "webgpu" : "wasm";
+    if (next === state.kokoroDevice) return;
+    if (IS_ANDROID && next === "webgpu" && !confirm("WebGPU is known to crash the stress harness on some Android devices. Continue with WebGPU?")) {
+      elements.kokoroDeviceSelect.value = state.kokoroDevice;
       return;
     }
-    state.neuralBackend = next;
-    localStorage.setItem(NEURAL_BACKEND_KEY, next);
-    state.neuralBackendActual = next;
-    // If a worker is already running/initializing, reset so next init picks new backend.
-    if (state.neuralWorker || state.neuralInitPromise) resetNeuralWorker(new Error("Switching compute backend"));
+    state.kokoroDevice = next;
+    localStorage.setItem(`${STORAGE_PREFIX}kokoro-device`, next);
+    // Persist explicit device choice; reset backend so next play uses new device.
+    resetNeuralWorker(new Error("Switching Kokoro compute device")).catch(() => {});
     clearNeuralCache();
     updateEngineUI();
-    showToast(next === "webgpu" ? "WebGPU selected – will fallback to WASM if unavailable" : "WASM selected – most stable");
+    showToast(next === "webgpu" ? "Kokoro WebGPU selected – will be probed only after you press Play" : "Kokoro WASM selected");
   });
+}
+if (elements.neuralBackendSelect) {
+  // Legacy row kept hidden – no-op
+  elements.neuralBackendSelect.addEventListener("change", () => {});
 }
 elements.voiceSelect.addEventListener("change", () => {
   state.selectedVoice = state.voices.find((voice) => voice.voiceURI === elements.voiceSelect.value) || state.selectedVoice;
