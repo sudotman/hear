@@ -307,9 +307,23 @@
         </div>
       </div>
 
+      <div class="setting-row voice-select-row" id="neural-backend-row">
+        <label for="neural-backend-select">
+          <span>Compute backend</span>
+          <small>WASM is stable · WebGPU is experimental</small>
+        </label>
+        <div class="voice-choice">
+          <select id="neural-backend-select">
+            <option value="wasm">WASM · stable (recommended)</option>
+            <option value="webgpu">WebGPU · experimental (fast)</option>
+          </select>
+          <p class="voice-traits" id="neural-backend-note">Engine: WASM · Single-threaded, most stable.</p>
+        </div>
+      </div>
+
       <details class="model-details">
         <summary>What is the natural voice?</summary>
-        <p><strong>KittenTTS Nano</strong> is an open-weight, 15-million-parameter speech model. Hear uses a low-memory, single-threaded WebAssembly engine in a background worker so it can run reliably in mobile Safari.</p>
+        <p><strong>KittenTTS Nano</strong> is an open-weight, 15-million-parameter speech model. Hear runs it in a background worker. <strong>WASM</strong> is single-threaded and most stable in mobile Safari; <strong>WebGPU</strong> can be faster but is known to crash the stress harness on Android.</p>
         <p>The five choices are voice profiles inside the same model—not five separate downloads. Model files are cached by Safari; the text and generated audio stay on this device.</p>
         <a href="https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX" target="_blank" rel="noreferrer">Model card and voice details ↗</a>
       </details>

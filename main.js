@@ -91,6 +91,9 @@ const elements = {
   naturalEngine: $("#natural-engine"),
   systemEngine: $("#system-engine"),
   engineDescription: $("#engine-description"),
+  neuralBackendSelect: $("#neural-backend-select"),
+  neuralBackendRow: $("#neural-backend-row"),
+  neuralBackendNote: $("#neural-backend-note"),
   voiceNote: $("#voice-note"),
   rateRange: $("#rate-range"),
   rateOutput: $("#rate-output"),
@@ -139,6 +142,14 @@ const initialNaturalVoice = NATURAL_VOICES[savedNaturalVoice]
   : LEGACY_NATURAL_VOICES[savedNaturalVoice] || "Bella";
 const IS_APPLE_MOBILE = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const IS_ANDROID = /Android/.test(navigator.userAgent);
+const NEURAL_BACKEND_KEY = `${STORAGE_PREFIX}neural-backend`;
+const NEURAL_BACKEND_DEFAULT = "wasm";
+const savedNeuralBackend = localStorage.getItem(NEURAL_BACKEND_KEY);
+const initialNeuralBackend = savedNeuralBackend === "webgpu" ? "webgpu" : "wasm";
+function supportsWebGPU() {
+  return typeof navigator !== "undefined" && "gpu" in navigator;
+}
 const NEURAL_INIT_STALL_MS = 90_000;
 const NEURAL_GENERATION_TIMEOUT_MS = 45_000;
 const AUDIO_LOAD_TIMEOUT_MS = 15_000;
@@ -240,8 +251,10 @@ const state = {
   neuralSegments: [],
   voices: [],
   selectedVoice: null,
-  engine: localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural",
+  engine: localStorage.getItem(`${STORAGE_PREFIX}engine`) || "system",
   neuralVoice: initialNaturalVoice,
+  neuralBackend: initialNeuralBackend,
+  neuralBackendActual: initialNeuralBackend,
   neuralWorker: null,
   neuralReady: false,
   neuralInitPromise: null,
@@ -1129,19 +1142,40 @@ function updateEngineUI() {
   elements.naturalEngine.disabled = !naturalVoiceAvailable();
   elements.naturalVoiceRow.hidden = !isNeural;
   elements.systemVoiceRow.hidden = isNeural;
-  elements.voiceType.textContent = isNeural ? "Natural · on device" : "System voice";
+  // Backend selector (WASM/WebGPU) – only visible when neural is active.
+  if (elements.neuralBackendRow) {
+    elements.neuralBackendRow.hidden = !isNeural;
+    if (elements.neuralBackendSelect) {
+      elements.neuralBackendSelect.value = state.neuralBackend;
+      const webgpuOption = elements.neuralBackendSelect.querySelector('option[value="webgpu"]');
+      if (webgpuOption) {
+        webgpuOption.disabled = !supportsWebGPU();
+        webgpuOption.textContent = supportsWebGPU() ? "WebGPU · experimental (fast)" : "WebGPU · not supported";
+      }
+    }
+    if (elements.neuralBackendNote) {
+      const actual = state.neuralBackendActual || state.neuralBackend;
+      const backendLabel = actual === "webgpu" ? "WebGPU" : "WASM";
+      let note = `Engine: ${backendLabel} · ${actual === "webgpu" ? "GPU-accelerated, may fallback to WASM" : "Single-threaded, most stable"}.`;
+      if (IS_ANDROID && state.neuralBackend === "webgpu") note += " WebGPU is known to crash the stress harness on Android – WASM recommended.";
+      if (!supportsWebGPU() && state.neuralBackend === "webgpu") note += " WebGPU not detected; will use WASM.";
+      elements.neuralBackendNote.textContent = note;
+    }
+  }
+  elements.voiceType.textContent = isNeural ? `Natural · ${state.neuralBackendActual === "webgpu" ? "WebGPU" : "WASM"} on device` : "System voice";
   elements.voiceName.textContent = isNeural
     ? NATURAL_VOICES[state.neuralVoice]?.name || "Bella"
     : state.selectedVoice?.name || "System voice";
   elements.voiceButton.setAttribute(
     "aria-label",
-    `Voice settings, ${isNeural ? `Natural, ${NATURAL_VOICES[state.neuralVoice]?.name || "Bella"}` : state.selectedVoice?.name || "System voice"}`,
+    `Voice settings, ${isNeural ? `Natural (${state.neuralBackendActual === "webgpu" ? "WebGPU" : "WASM"}), ${NATURAL_VOICES[state.neuralVoice]?.name || "Bella"}` : state.selectedVoice?.name || "System voice"}`,
   );
+  const backendHint = state.neuralBackendActual === "webgpu" ? "WebGPU" : "WASM";
   elements.engineDescription.textContent = naturalVoiceAvailable()
-    ? "KittenTTS 15M · generated privately on this device"
+    ? `KittenTTS 15M · ${backendHint} · generated privately on this device`
     : "Natural voice currently supports English works";
   elements.voiceNote.textContent = isNeural
-    ? "The first use downloads about 60 MB of voice files. Safari caches them locally; the text you listen to never goes to a speech service."
+    ? `The first use downloads about 60 MB of voice files. Safari caches them locally; the text you listen to never goes to a speech service. Current backend: ${backendHint}${IS_ANDROID ? " – WASM recommended on Android" : ""}.`
     : "System voices start instantly, but Safari may expose only its compact voices. Natural voice is the higher-quality option for English works.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
   elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.Bella.note;
@@ -1194,6 +1228,21 @@ function resetNeuralWorker(error = new Error("The natural voice engine was reset
   }
   state.neuralRequests.clear();
   hideLoading();
+  // If init never succeeded (no NEURAL_MODEL_KEY persistence yet) don't leave a stale
+  // "downloaded" flag that makes every refresh show "Downloading…".
+  // Only clear the flag when the worker failed during initial download – keep it if
+  // we had previously succeeded and just restarted.
+  if (error && !state.neuralReady) {
+    // If the error happened during the first download, clear the stored version
+    // so we don't think we're cached on next reload. If we were previously
+    // ready, keep the flag – the cache may still be valid.
+    const hadPreviousSuccess = localStorage.getItem(NEURAL_MODEL_KEY) === NEURAL_MODEL_VERSION;
+    if (!hadPreviousSuccess) {
+      // No-op: key already not set.
+    } else if (error.message && /download|network|fetch/i.test(error.message)) {
+      // Keep key; fetch may transiently fail. Don't churn localStorage.
+    }
+  }
 }
 
 function armNeuralInitTimer(worker) {
@@ -1231,13 +1280,33 @@ function ensureNeuralWorker({ background = false } = {}) {
     const message = event.data;
     if (message.type === "progress") {
       armNeuralInitTimer(worker);
+      if (message.backend) state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : "wasm";
+      const backendTag = message.backend === "webgpu" ? "WebGPU" : message.backend === "wasm" ? "WASM" : state.neuralBackend === "webgpu" ? "WebGPU" : "WASM";
+      // Always keep voice button label up to date even when not showing overlay.
+      updateEngineUI();
       if (!state.neuralShowLoading) return;
-      if (message.file?.includes("onnx") && Number.isFinite(message.progress)) {
-        setNeuralLoading(message.progress, `Downloading voice model · ${Math.round(message.progress)}%`);
+      if (message.status === "download" && message.file?.includes("onnx") && Number.isFinite(message.progress)) {
+        setNeuralLoading(message.progress, `Downloading model.onnx [${backendTag}] · ${Math.round(message.progress)}%`);
+      } else if (message.status === "download" && message.file?.includes("voices") && Number.isFinite(message.progress)) {
+        setNeuralLoading(message.progress, `Downloading voices.npz [${backendTag}] · ${Math.round(message.progress)}%`);
+      } else if (message.status === "downloading" && message.file?.includes("voices")) {
+        setNeuralLoading(message.progress ?? 0, `Downloading voices.npz [${backendTag}] · ${message.progress ? Math.round(message.progress) + "%" : "…"}`);
+      } else if (message.status === "downloading") {
+        setNeuralLoading(message.progress ?? 0, `Downloading ${message.file || "voice model"} [${backendTag}] · ${message.progress ? Math.round(message.progress) + "%" : "…"}`);
+      } else if (message.status === "unzipping") {
+        setNeuralLoading(null, `Unzipping voices (cached ${message.file || "voices"}…) [${backendTag}]`);
+      } else if (message.status === "parsing") {
+        setNeuralLoading(message.progress ?? null, `Preparing voice profiles · ${message.progress ? Math.round(message.progress) + "%" : ""} [${backendTag}]`);
+      } else if (message.status === "fallback") {
+        setNeuralLoading(null, message.message || "WebGPU failed – using WASM");
+        state.neuralBackendActual = "wasm";
+        updateEngineUI();
       } else if (message.status === "initiate" || message.status === "starting") {
-        setNeuralLoading(null, "Preparing voice files");
+        setNeuralLoading(null, `Preparing voice files [${backendTag}]`);
       } else if (message.status === "initializing") {
-        setNeuralLoading(null, "Starting the low-memory voice engine");
+        setNeuralLoading(null, `Starting the ${backendTag} voice engine`);
+      } else if (Number.isFinite(message.progress)) {
+        setNeuralLoading(message.progress, `Preparing voices [${backendTag}] · ${Math.round(message.progress)}%`);
       }
       return;
     }
@@ -1245,19 +1314,42 @@ function ensureNeuralWorker({ background = false } = {}) {
     if (message.type === "ready") {
       clearNeuralInitTimer();
       state.neuralReady = true;
+      state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : message.device === "webgpu" ? "webgpu" : "wasm";
       localStorage.setItem(NEURAL_MODEL_KEY, NEURAL_MODEL_VERSION);
+      localStorage.setItem(NEURAL_BACKEND_KEY, state.neuralBackend);
       const resolveInitialization = state.neuralInitResolve;
       state.neuralInitPromise = null;
       state.neuralInitResolve = null;
       state.neuralInitReject = null;
       state.neuralShowLoading = false;
+      updateEngineUI();
       resolveInitialization?.();
       hideLoading();
       return;
     }
 
+    if (message.type === "backend") {
+      state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : "wasm";
+      updateEngineUI();
+      return;
+    }
+
     if (message.type === "generating") {
-      if (state.playback === "buffering") elements.nowSection.textContent = "Generating on this device";
+      if (message.backend) state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : "wasm";
+      const tag = message.backend === "webgpu" ? "WebGPU" : message.backend === "wasm" ? "WASM" : state.neuralBackendActual === "webgpu" ? "WebGPU" : "WASM";
+      const stage = message.stage;
+      if (state.playback === "buffering") {
+        if (stage === "phonemize") elements.nowSection.textContent = `Phonemizing text [${tag}]…`;
+        else if (stage === "synthesize") elements.nowSection.textContent = `Synthesizing ${message.length ? Math.round(message.length) + " chars" : ""} [${tag}]…`;
+        else if (stage === "encoding") elements.nowSection.textContent = `Encoding audio [${tag}]…`;
+        else elements.nowSection.textContent = `Generating on this device [${tag}]`;
+      }
+      // Also reflect in the loading overlay when visible.
+      if (state.neuralShowLoading) {
+        if (stage === "phonemize") setNeuralLoading(null, `Phonemizing passage [${tag}]`);
+        else if (stage === "synthesize") setNeuralLoading(null, `Synthesizing speech [${tag}]`);
+        else if (stage === "encoding") setNeuralLoading(null, `Encoding audio [${tag}]`);
+      }
       return;
     }
 
@@ -1297,9 +1389,16 @@ function ensureNeuralWorker({ background = false } = {}) {
     resetNeuralWorker(error);
   });
 
-  if (state.neuralShowLoading) setNeuralLoading(null, "Starting the private voice engine");
+  if (state.neuralShowLoading) {
+    const tag = state.neuralBackend === "webgpu" ? "WebGPU" : "WASM";
+    setNeuralLoading(null, `Starting the ${tag} voice engine`);
+  }
   armNeuralInitTimer(worker);
-  worker.postMessage({ type: "init" });
+  // Guard: if Android + WebGPU requested, warn but still let worker fallback.
+  if (IS_ANDROID && state.neuralBackend === "webgpu") {
+    console.warn("WebGPU on Android is experimental and has crashed the stress harness; will fallback to WASM if needed.");
+  }
+  worker.postMessage({ type: "init", backend: state.neuralBackend });
   return state.neuralInitPromise;
 }
 
@@ -1934,8 +2033,10 @@ function activateWork(work) {
   state.article = work;
   state.chunks = createSpeechChunks(work);
   state.neuralSegments = createNeuralSegments(state.chunks);
+  // Default to system for new users – natural downloads ~60 MB and should be opt-in.
+  // Returning English users who previously chose natural keep their preference.
   state.engine = work.lang.toLowerCase().startsWith("en")
-    ? localStorage.getItem(`${STORAGE_PREFIX}engine`) || "neural"
+    ? localStorage.getItem(`${STORAGE_PREFIX}engine`) || "system"
     : "system";
   state.currentIndex = 0;
   state.currentSegmentIndex = 0;
@@ -1950,10 +2051,15 @@ function activateWork(work) {
   updateProgress();
   rememberWork(work);
 
+  // Warm only if user previously downloaded AND is on a fast connection and has
+  // idle time – but never show progress. This was the cause of "Downloading
+  // local model" on every refresh: the warm fetched again and briefly showed
+  // the overlay. Now it is background-only and gated behind the opt-in flag.
+  // If you want zero network on refresh, comment the block below entirely.
   if (state.engine === "neural" && localStorage.getItem(NEURAL_MODEL_KEY) === NEURAL_MODEL_VERSION) {
     const warmNaturalVoice = () => ensureNeuralWorker({ background: true }).catch(() => {});
-    if ("requestIdleCallback" in window) window.requestIdleCallback(warmNaturalVoice, { timeout: 2500 });
-    else window.setTimeout(warmNaturalVoice, 500);
+    if ("requestIdleCallback" in window) window.requestIdleCallback(warmNaturalVoice, { timeout: 4000 });
+    else window.setTimeout(warmNaturalVoice, 1200);
   }
 
   elements.player.hidden = false;
@@ -2228,6 +2334,24 @@ elements.naturalVoiceSelect.addEventListener("change", () => {
     playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
   }
 });
+if (elements.neuralBackendSelect) {
+  elements.neuralBackendSelect.addEventListener("change", () => {
+    const next = elements.neuralBackendSelect.value === "webgpu" ? "webgpu" : "wasm";
+    if (next === state.neuralBackend) return;
+    if (IS_ANDROID && next === "webgpu" && !confirm("WebGPU is known to crash the stress harness on Android. Continue with WebGPU?")) {
+      elements.neuralBackendSelect.value = state.neuralBackend;
+      return;
+    }
+    state.neuralBackend = next;
+    localStorage.setItem(NEURAL_BACKEND_KEY, next);
+    state.neuralBackendActual = next;
+    // If a worker is already running/initializing, reset so next init picks new backend.
+    if (state.neuralWorker || state.neuralInitPromise) resetNeuralWorker(new Error("Switching compute backend"));
+    clearNeuralCache();
+    updateEngineUI();
+    showToast(next === "webgpu" ? "WebGPU selected – will fallback to WASM if unavailable" : "WASM selected – most stable");
+  });
+}
 elements.voiceSelect.addEventListener("change", () => {
   state.selectedVoice = state.voices.find((voice) => voice.voiceURI === elements.voiceSelect.value) || state.selectedVoice;
   localStorage.setItem(`${STORAGE_PREFIX}voice`, state.selectedVoice?.voiceURI || "");
