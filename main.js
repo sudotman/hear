@@ -227,14 +227,18 @@ const EXCLUDED_SECTIONS = new Set([
   "وصلات خارجية",
 ]);
 
+const rawBackendPreference = localStorage.getItem(`${STORAGE_PREFIX}tts-backend`);
+// Migrate legacy "auto" (unreliable WebGPU benchmark) to explicit choice.
+// Fresh installs default to "system" (instant, no download) per #4.
+const initialBackendPreference = rawBackendPreference === "auto" ? "system" : rawBackendPreference || "system";
 const state = {
   article: null,
   chunks: [],
   neuralSegments: [],
   voices: [],
   selectedVoice: null,
-  backendPreference: localStorage.getItem(`${STORAGE_PREFIX}tts-backend`) || "auto",
-  engine: (localStorage.getItem(`${STORAGE_PREFIX}tts-backend`) || "auto") === "system" ? "system" : "neural",
+  backendPreference: initialBackendPreference,
+  engine: initialBackendPreference === "system" ? "system" : "neural",
   activeBackendId: null,
   ttsBackend: null,
   generationEpoch: 0,
@@ -1164,8 +1168,13 @@ function updateEngineUI() {
     state.engine = "system";
     state.backendPreference = "system";
   }
+  // Auto is deprecated – hide it and make the choice explicit.
+  if (elements.autoEngine) elements.autoEngine.hidden = true;
+  // Leftover from pre-overhaul wasm/webgpu toggle – hidden, Kokoro now handles WebGPU safely.
+  if (elements.neuralBackendRow) elements.neuralBackendRow.hidden = true;
   const isNeural = state.engine === "neural";
   for (const [choice, element] of [["auto", elements.autoEngine], ["kokoro", elements.kokoroEngine], ["kitten", elements.kittenEngine], ["system", elements.systemEngine]]) {
+    if (!element || element.hidden) continue;
     element.setAttribute("aria-pressed", String(state.backendPreference === choice));
     element.disabled = choice !== "system" && !naturalVoiceAvailable();
   }
@@ -1173,9 +1182,15 @@ function updateEngineUI() {
   elements.systemVoiceRow.hidden = isNeural;
   const backendLabel = state.activeBackendId === "kitten-wasm"
     ? "Efficient · on device"
-    : state.backendPreference === "auto" && !state.activeBackendId
-      ? "Auto · on device"
-      : "Natural · on device";
+    : state.activeBackendId === "kokoro-webgpu"
+      ? "Natural · WebGPU · on device"
+      : state.activeBackendId === "kokoro-wasm"
+        ? "Natural · WASM · on device"
+        : state.backendPreference === "kitten"
+          ? "Efficient · on device"
+          : state.backendPreference === "kokoro"
+            ? "Natural · on device"
+            : "Natural · on device";
   elements.voiceType.textContent = isNeural ? backendLabel : "Instant · system";
   elements.voiceName.textContent = isNeural
     ? state.activeBackendId === "kitten-wasm" ? "Bella" : NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
@@ -1184,19 +1199,18 @@ function updateEngineUI() {
     "aria-label",
     `Voice settings, ${isNeural ? `${backendLabel}, ${elements.voiceName.textContent}` : state.selectedVoice?.name || "System voice"}`,
   );
-  const backendHint = state.neuralBackendActual === "webgpu" ? "WebGPU" : "WASM";
   elements.engineDescription.textContent = naturalVoiceAvailable()
-    ? state.backendPreference === "auto"
-      ? "Benchmarked privately · WebGPU, WASM, or system fallback"
-      : state.backendPreference === "kitten"
-        ? "Kitten Nano 15M · efficient WASM"
-        : state.backendPreference === "kokoro"
-          ? "Kokoro 82M · safe WebGPU with WASM fallback"
-          : "Starts instantly with an installed voice"
+    ? state.backendPreference === "kitten"
+      ? "Kitten Nano 15M · explicit WASM choice"
+      : state.backendPreference === "kokoro"
+        ? "Kokoro 82M · explicit choice, WebGPU tested only after you pick it"
+        : state.backendPreference === "auto"
+          ? "Auto is disabled – pick Kitten or Kokoro explicitly"
+          : "Explicit choice saved – pick Kitten (efficient) or Kokoro (natural) — no auto download"
     : "Natural voice currently supports English works";
   elements.voiceNote.textContent = isNeural
-    ? "The first benchmark may download a local model. Measurements and generated passages stay on this device; text is never sent to a speech service."
-    : "System voices start instantly, but Safari may expose only its compact voices. Natural voice is the higher-quality option for English works.";
+    ? "Explicit engine saved. The first play after you pick Kitten/Kokoro may download ~60–100 MB; nothing is downloaded until you choose. Measurements and generated passages stay on this device."
+    : "System voices start instantly (no download). Choose Kitten (15M, fast) or Kokoro (82M, higher fidelity) to save an explicit local model choice.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
   elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.af_heart.note;
 }
@@ -1476,15 +1490,36 @@ function legacyGetNeuralSegment(segmentIndex) {
 function ttsCallbacks() {
   return {
     onProgress(message) {
-      if (message.file?.includes("onnx") && Number.isFinite(message.progress)) {
-        setNeuralLoading(message.progress, `Downloading local voice model · ${Math.round(message.progress)}%`);
+      const backendLabel = message.backend || state.activeBackendId || state.backendPreference || "local";
+      const pct = Number.isFinite(message.progress) ? Math.round(message.progress) : null;
+      const file = message.file || "";
+      const status = message.status || "";
+      // Detailed: file + percent + backend. Kitten sends "onnx/model.onnx" + "voices" archive;
+      // Kokoro sends model files via transformers progress_callback.
+      if (file.includes("onnx") && pct !== null) {
+        setNeuralLoading(message.progress, `Downloading ${file} [${backendLabel}] · ${pct}%`);
+      } else if (file.includes("voices") && pct !== null) {
+        setNeuralLoading(message.progress, `Downloading Kitten voices [${backendLabel}] · ${pct}%`);
+      } else if (status === "starting") {
+        setNeuralLoading(null, `Starting ${backendLabel} [explicit choice]`);
+      } else if (status === "progress" && pct !== null) {
+        setNeuralLoading(message.progress, `Preparing ${file || "voice files"} [${backendLabel}] · ${pct}%`);
+      } else if (pct !== null) {
+        setNeuralLoading(message.progress, `Preparing ${file || "local voice"} [${backendLabel}] · ${pct}%`);
+      } else if (file) {
+        setNeuralLoading(null, `Preparing ${file} [${backendLabel}]`);
       } else {
-        setNeuralLoading(null, "Preparing local voice files");
+        setNeuralLoading(null, `Preparing ${backendLabel} local voice`);
+      }
+      // Also surface in player bar while buffering
+      if (state.playback === "buffering") {
+        elements.nowSection.textContent = file ? `Downloading ${file.split("/").pop()} · ${pct !== null ? pct + "%" : ""} [${backendLabel}]` : `Preparing voice files [${backendLabel}]`;
       }
     },
     onReady(message) {
       state.neuralReady = true;
       localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
+      state.activeBackendId = message.backend || state.activeBackendId;
       console.info("[Hear TTS] runtime", {
         crossOriginIsolated: message.crossOriginIsolated,
         sharedArrayBuffer: message.sharedArrayBuffer,
@@ -1492,9 +1527,19 @@ function ttsCallbacks() {
         backend: message.backend,
       });
       hideLoading();
+      updateEngineUI();
     },
-    onGenerating() {
-      if (state.playback === "buffering") elements.nowSection.textContent = "Generating on this device";
+    onGenerating(message) {
+      const backendLabel = message?.backend || state.activeBackendId || state.backendPreference || "local";
+      const total = state.neuralSegments?.length || null;
+      const idx = state.currentSegmentIndex + 1;
+      const segLabel = total ? `segment ${idx}/${total}` : "passage";
+      if (state.playback === "buffering") {
+        elements.nowSection.textContent = total ? `Generating ${segLabel} [${backendLabel}]` : `Generating on this device [${backendLabel}]`;
+      }
+      if (state.neuralShowLoading) {
+        setNeuralLoading(null, `Synthesizing ${segLabel} [${backendLabel}]`);
+      }
     },
     onMetric(metric) {
       state.rtfSamples.push(metric.rtf);
@@ -1588,9 +1633,17 @@ async function chooseAutomaticBackend() {
 }
 
 async function createSelectedBackend() {
-  if (state.backendPreference === "auto") return chooseAutomaticBackend();
+  // "auto" is deprecated – it previously benchmarked WebGPU (crashes on Android)
+  // and downloaded WASM models without consent. Treat it as an explicit error
+  // and fall back to the no-download system voice; user must pick kitten/kokoro.
+  if (state.backendPreference === "auto") {
+    console.warn("[Hear TTS] auto backend is disabled – use an explicit engine choice");
+    return null;
+  }
   if (state.backendPreference === "kitten") return new KittenWasm(ttsCallbacks());
   if (state.backendPreference === "kokoro") {
+    // Kokoro WebGPU is still crash-prone on some Android WebViews; probe is
+    // cached and only runs after explicit user selection, not on page load.
     const probe = await probeKokoroWebGpu();
     if (probe.ok && probe.rtf < 0.8) return probe.backend || new KokoroWebGPU(ttsCallbacks());
     return new KokoroWasm(ttsCallbacks());
@@ -1622,7 +1675,8 @@ async function ensureNeuralWorker({ background = false } = {}) {
     await state.ttsBackend.load();
     return state.ttsBackend;
   }
-  if (!background) setNeuralLoading(null, "Selecting the fastest private voice");
+  const pendingLabel = state.backendPreference === "kitten" ? "Kitten Nano 15M" : state.backendPreference === "kokoro" ? "Kokoro 82M" : "local voice";
+  if (!background) setNeuralLoading(null, `Starting ${pendingLabel} [explicit: ${state.backendPreference}]`);
   const backend = await createSelectedBackend();
   if (!backend) {
     state.engine = "system";
@@ -2320,9 +2374,9 @@ function activateWork(work) {
   state.article = work;
   state.chunks = createSpeechChunks(work);
   state.neuralSegments = createNeuralSegments(state.chunks);
-  state.backendPreference = work.lang.toLowerCase().startsWith("en")
-    ? localStorage.getItem(`${STORAGE_PREFIX}tts-backend`) || "auto"
-    : "system";
+  const storedBackend = localStorage.getItem(`${STORAGE_PREFIX}tts-backend`);
+  const persisted = storedBackend === "auto" ? "system" : storedBackend;
+  state.backendPreference = work.lang.toLowerCase().startsWith("en") ? persisted || "system" : "system";
   state.engine = state.backendPreference === "system" ? "system" : "neural";
   state.currentIndex = 0;
   state.currentSegmentIndex = 0;
@@ -2337,11 +2391,10 @@ function activateWork(work) {
   updateProgress();
   rememberWork(work);
 
-  if (state.engine === "neural" && localStorage.getItem(`${STORAGE_PREFIX}neural-ready`) === "true") {
-    const warmNaturalVoice = () => ensureNeuralWorker({ background: true }).catch(() => {});
-    if ("requestIdleCallback" in window) window.requestIdleCallback(warmNaturalVoice, { timeout: 4000 });
-    else window.setTimeout(warmNaturalVoice, 1200);
-  }
+  // No auto warm/download on work open – user must explicitly pick a neural
+  // engine and press Download & listen / Preview. Previously this warmed
+  // `auto` and re-fetched on every refresh (issue #4/#5).
+  void state;
 
   elements.player.hidden = false;
   document.body.classList.add("player-visible");
