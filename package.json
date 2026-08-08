@@ -4,12 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/patch-phonemizer.js && vite",
-    "build": "node scripts/patch-phonemizer.js && vite build",
+    "dev": "vite",
+    "build": "vite build && node scripts/check-bundle.js",
     "preview": "vite preview",
-    "postinstall": "node scripts/patch-phonemizer.js"
+    "test": "vitest run",
+    "test:browser": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.1",
+    "vitest": "^3.2.4",
     "vite": "^7.0.6"
   },
   "dependencies": {

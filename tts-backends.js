@@ -1,3 +1,5 @@
+import { KITTEN_DEFAULT_MODEL, KITTEN_DTYPES, KITTEN_MODELS, KOKORO_DTYPES, KOKORO_MODEL } from "./app-config.js";
+
 const WORKER_INIT_TIMEOUT_MS = 180_000;
 const GENERATION_TIMEOUT_MS = 180_000;
 const BENCHMARK_TEXT = "A clear voice makes every good sentence easier to follow.";
@@ -155,14 +157,9 @@ class WorkerTtsBackend {
   }
 }
 
-export const KOKORO_DTYPE_OPTIONS = ["fp32", "fp16", "q8", "q4", "q4f16", "uint8"];
-export const KITTEN_DTYPE_OPTIONS = ["fp32"];
-export const KITTEN_MODEL_OPTIONS = [
-  "onnx-community/KittenTTS-Nano-v0.8-ONNX",
-  "KittenML/kitten-tts-mini-0.8",
-  "KittenML/kitten-tts-micro-0.8",
-  "onnx-community/kitten-tts-nano-0.1-ONNX",
-];
+export const KOKORO_DTYPE_OPTIONS = KOKORO_DTYPES;
+export const KITTEN_DTYPE_OPTIONS = KITTEN_DTYPES;
+export const KITTEN_MODEL_OPTIONS = KITTEN_MODELS;
 
 function kokoroLabel(device, dtype) {
   return `Kokoro ${device === "webgpu" ? "WebGPU" : "WASM"} ${dtype}`;
@@ -170,8 +167,8 @@ function kokoroLabel(device, dtype) {
 
 export class KokoroWebGPU extends WorkerTtsBackend {
   constructor(callbacks, opts = {}) {
-    const dtype = KOKORO_DTYPE_OPTIONS.includes(opts.dtype) ? opts.dtype : "fp32";
-    const model = opts.model || "onnx-community/Kokoro-82M-v1.0-ONNX";
+    const dtype = "fp32";
+    const model = opts.model || KOKORO_MODEL;
     super({
       id: "kokoro-webgpu",
       label: kokoroLabel("webgpu", dtype),
@@ -187,7 +184,7 @@ export class KokoroWebGPU extends WorkerTtsBackend {
 export class KokoroWasm extends WorkerTtsBackend {
   constructor(callbacks, opts = {}) {
     const dtype = KOKORO_DTYPE_OPTIONS.includes(opts.dtype) ? opts.dtype : "q8";
-    const model = opts.model || "onnx-community/Kokoro-82M-v1.0-ONNX";
+    const model = opts.model || KOKORO_MODEL;
     super({
       id: "kokoro-wasm",
       label: kokoroLabel("wasm", dtype),
@@ -203,7 +200,7 @@ export class KokoroWasm extends WorkerTtsBackend {
 export class KittenWasm extends WorkerTtsBackend {
   constructor(callbacks, opts = {}) {
     const dtype = KITTEN_DTYPE_OPTIONS.includes(opts.dtype) ? opts.dtype : "fp32";
-    const model = KITTEN_MODEL_OPTIONS.includes(opts.model) ? opts.model : "onnx-community/KittenTTS-Nano-v0.8-ONNX";
+    const model = KITTEN_MODEL_OPTIONS.includes(opts.model) ? opts.model : KITTEN_DEFAULT_MODEL;
     const short = model.split("/").pop();
     super({
       id: "kitten-wasm",

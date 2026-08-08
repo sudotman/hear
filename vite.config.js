@@ -14,12 +14,16 @@ function webkitReadableStreamPatch() {
       // Original: `for await(const A of e)C.push(A)` -> minified varies.
       if (code.includes("DecompressionStream") && code.includes("for await")) {
         // Replace `for await(const X of Y)Z.push(X)` with getReader loop.
+        const pattern = /for await\s*\(\s*const\s+(\w+)\s+of\s+(\w+)\s*\)\s*(\w+)\.push\(\1\)/g;
         const patched = code.replace(
-          /for await\s*\(\s*const\s+(\w+)\s+of\s+(\w+)\s*\)\s*(\w+)\.push\(\1\)/g,
+          pattern,
           (_m, chunk, stream, arr) =>
             `{const _r=${stream}.getReader();try{for(;;){const{done:${chunk},value:_v}=await _r.read();if(${chunk})break;${arr}.push(_v)}}finally{_r.releaseLock()}}`,
         );
-        if (patched !== code) return patched;
+        if (patched === code) {
+          throw new Error(`WebKit ReadableStream compatibility patch did not match ${id}. Update vite.config.js before shipping.`);
+        }
+        return { code: patched, map: null };
       }
       return null;
     },

@@ -10,8 +10,10 @@
     <meta name="theme-color" content="#f1eee5" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <title>hear anything!</title>
+    <title>Hear — the written world, spoken</title>
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -60,7 +62,7 @@
             <form class="catalog-search" id="catalog-search" role="search">
               <label class="sr-only" for="catalog-query">Search public-domain books</label>
               <input id="catalog-query" type="search" autocomplete="off" placeholder="Search by title, author, or subject" />
-              <button type="submit">
+              <button type="submit" aria-label="Find a public-domain book">
                 <span>Find a book</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
               </button>
@@ -141,7 +143,7 @@
             <label for="article-query">Wikipedia link or article title</label>
             <div class="open-field">
               <input id="article-query" name="article" autocomplete="off" spellcheck="false" placeholder="en.wikipedia.org/wiki/…" required />
-              <button type="submit"><span>Open article</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
+              <button type="submit" aria-label="Open Wikipedia article"><span>Open article</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
             </div>
             <button class="shortcut-link" id="setup-button" type="button">Add the Safari shortcut</button>
           </form>
@@ -206,7 +208,7 @@
       <button class="player-now" id="now-playing-button" type="button" aria-label="Return to the current work">
         <span class="mini-cover" id="mini-cover"><span>W</span><img id="mini-cover-image" alt="" crossorigin="anonymous" hidden /></span>
         <span class="now-copy">
-          <span id="now-section" role="status" aria-live="polite">Ready to listen</span>
+          <span id="now-section">Ready to listen</span>
           <strong id="now-title">Hear</strong>
         </span>
       </button>
@@ -246,7 +248,9 @@
       </div>
     </section>
 
-    <input id="epub-input" class="sr-only" type="file" accept=".epub,application/epub+zip" />
+    <p class="sr-only" id="player-announcement" role="status" aria-live="polite"></p>
+
+    <input id="epub-input" type="file" accept=".epub,application/epub+zip" hidden aria-hidden="true" tabindex="-1" />
 
     <dialog class="sheet chapters-sheet" id="chapters-sheet" aria-labelledby="chapters-sheet-title">
       <div class="sheet-head">
@@ -275,33 +279,17 @@
       <div class="setting-row engine-setting-row">
         <div class="setting-label">
           <span>Playback engine</span>
-          <small id="engine-description">Kokoro 82M · generated privately on this device</small>
+          <small id="engine-description">System voice · instant · no download</small>
         </div>
         <div class="engine-options" role="group" aria-label="Playback engine">
-          <button id="auto-engine" type="button" aria-pressed="true">
-            <span>Auto</span>
-            <small>Best fit</small>
-          </button>
-          <button id="kokoro-engine" type="button" aria-pressed="false">
-            <span>Natural</span>
-            <small>Kokoro</small>
-          </button>
-          <button id="kitten-engine" type="button" aria-pressed="false">
-            <span>Efficient</span>
-            <small>Kitten</small>
-          </button>
-          <button id="system-engine" type="button" aria-pressed="false">
-            <span>Instant</span>
-            <small>System voice</small>
-          </button>
+          <button id="kokoro-engine" type="button" aria-pressed="false"><span>Natural</span><small>Kokoro</small></button>
+          <button id="kitten-engine" type="button" aria-pressed="false"><span>Efficient</span><small>Kitten</small></button>
+          <button id="system-engine" type="button" aria-pressed="true"><span>Instant</span><small>System voice</small></button>
         </div>
       </div>
 
-      <div class="setting-row voice-select-row" id="natural-voice-row">
-        <label for="natural-voice-select">
-          <span>Natural voice</span>
-          <small>Higher fidelity · English works</small>
-        </label>
+      <div class="setting-row voice-select-row" id="natural-voice-row" hidden>
+        <label for="natural-voice-select"><span>Natural voice</span><small>Higher fidelity · English works</small></label>
         <div class="voice-choice">
           <select id="natural-voice-select">
             <option value="af_heart">Heart · warm American · all-round</option>
@@ -314,174 +302,96 @@
         </div>
       </div>
 
-      <div class="setting-row voice-select-row" id="neural-backend-row" hidden>
-        <label for="neural-backend-select">
-          <span>Compute backend (legacy)</span>
-          <small>WASM is stable · WebGPU is experimental</small>
-        </label>
-        <div class="voice-choice">
-          <select id="neural-backend-select">
-            <option value="wasm">WASM · stable (recommended)</option>
-            <option value="webgpu">WebGPU · experimental (fast)</option>
-          </select>
-          <p class="voice-traits" id="neural-backend-note">Engine: WASM · Single-threaded, most stable.</p>
-        </div>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kokoro-device-row" hidden>
-        <label for="kokoro-device-select">
-          <span>Kokoro compute</span>
-          <small id="kokoro-device-help">Device · WASM = stable · WebGPU = fast</small>
-        </label>
-        <div class="voice-choice">
-          <select id="kokoro-device-select">
-            <option value="wasm">WASM · stable</option>
-            <option value="webgpu">WebGPU · experimental (fast)</option>
-          </select>
-          <p class="voice-traits" id="kokoro-device-note">Explicit, saved per device.</p>
-        </div>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kokoro-dtype-row" hidden>
-        <label for="kokoro-dtype-select">
-          <span>Kokoro precision</span>
-          <small id="kokoro-dtype-help">Quantization · experiment freely</small>
-        </label>
-        <div class="voice-choice">
-          <select id="kokoro-dtype-select">
-            <option value="fp32">fp32 · full · 326 MB (model.onnx)</option>
-            <option value="fp16">fp16 · half · 163 MB (model_fp16.onnx)</option>
-            <option value="q8">q8 · quantized · 92 MB (model_quantized.onnx)</option>
-            <option value="q4">q4 · 4-bit · 305 MB (model_q4.onnx)</option>
-            <option value="q4f16">q4f16 · 4-bit+fp16 · 154 MB (model_q4f16.onnx)</option>
-            <option value="uint8">uint8 · 177 MB (model_uint8.onnx)</option>
-          </select>
-          <p class="voice-traits" id="kokoro-dtype-note">Saved as hearwiki:kokoro-dtype. Cache key includes dtype — switching refetches.</p>
-        </div>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kitten-model-row" hidden>
-        <label for="kitten-model-select">
-          <span>Kitten model</span>
-          <small id="kitten-model-help">Nano · Mini · Micro · experiment</small>
-        </label>
-        <div class="voice-choice">
-          <select id="kitten-model-select">
-            <option value="onnx-community/KittenTTS-Nano-v0.8-ONNX">Nano 0.8 · 15M · onnx-community (fp32) — default</option>
-            <option value="KittenML/kitten-tts-mini-0.8">Mini 0.8 · KittenML · larger · WASM</option>
-            <option value="KittenML/kitten-tts-micro-0.8">Micro 0.8 · KittenML · tiny · WASM</option>
-            <option value="onnx-community/kitten-tts-nano-0.1-ONNX">Nano 0.1 · legacy · onnx-community (quantized)</option>
-          </select>
-          <p class="voice-traits" id="kitten-model-note">Saved as hearwiki:kitten-model. WASM-only. Mini/Micro are experimental — try Nano first.</p>
-        </div>
-      </div>
-
       <div class="setting-row voice-select-row" id="kitten-voice-row" hidden>
-        <label for="kitten-voice-select">
-          <span>Kitten voice</span>
-          <small>8 voices · Bella · Jasper · Luna · Bruno · Rosie · Hugo · Kiki · Leo</small>
-        </label>
+        <label for="kitten-voice-select"><span>Kitten voice</span><small>Eight local voice profiles</small></label>
         <div class="voice-choice">
           <select id="kitten-voice-select">
-            <option value="Bella">Bella · female · expr-2-f</option>
-            <option value="Jasper">Jasper · male · expr-2-m</option>
-            <option value="Luna">Luna · female · expr-3-f</option>
-            <option value="Bruno">Bruno · male · expr-3-m</option>
-            <option value="Rosie">Rosie · female · expr-4-f</option>
-            <option value="Hugo">Hugo · male · expr-4-m</option>
-            <option value="Kiki">Kiki · female · expr-5-f</option>
-            <option value="Leo">Leo · male · expr-5-m</option>
+            <option value="Bella">Bella · warm female</option><option value="Jasper">Jasper · warm male</option>
+            <option value="Luna">Luna · female</option><option value="Bruno">Bruno · male</option>
+            <option value="Rosie">Rosie · female</option><option value="Hugo">Hugo · male</option>
+            <option value="Kiki">Kiki · female</option><option value="Leo">Leo · male</option>
           </select>
           <p class="voice-traits" id="kitten-voice-traits">Warm, efficient Kitten voice — Bella is default.</p>
         </div>
       </div>
 
-      <div class="setting-row voice-select-row" id="kitten-dtype-row" hidden>
-        <label for="kitten-dtype-select">
-          <span>Kitten precision</span>
-          <small id="kitten-dtype-help">WASM dtype · experiment</small>
-        </label>
-        <div class="voice-choice">
-          <select id="kitten-dtype-select">
-            <option value="fp32">fp32 · full (default)</option>
-          </select>
-          <p class="voice-traits" id="kitten-dtype-note">Saved as hearwiki:kitten-dtype. Only fp32 is shipped for Nano 0.8.</p>
-        </div>
-      </div>
-
-      <div class="setting-row" id="active-model-row">
-        <div class="setting-label">
-          <span>Active model</span>
-          <small id="active-model-label">System voice · no download</small>
-        </div>
-      </div>
-
-      <details class="model-details">
-        <summary>What is the natural voice?</summary>
-        <p><strong>Explicit choice</strong> — pick <strong>Kitten Nano 15M</strong> (efficient WASM) or <strong>Kokoro 82M</strong> (WebGPU tested only after you pick it). No auto benchmark; the choice and model version are saved on this device.</p>
-        <p>Auto benchmark is disabled because WebGPU is unreliable to probe automatically on some Android devices. Generated passages are stored on this device using a key that includes the text, model version, voice, speed, and numeric format.</p>
-        <p>Voice profiles are inside the model — not separate downloads. Model files are cached by Safari; the text and generated audio stay on this device.</p>
-        <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX" target="_blank" rel="noreferrer">Model card and voice samples ↗</a>
-      </details>
-
-      <div class="setting-row voice-select-row" id="system-voice-row" hidden>
-        <label for="voice-select">
-          <span>System voice</span>
-          <small>Voices installed on this device</small>
-        </label>
+      <div class="setting-row voice-select-row" id="system-voice-row">
+        <label for="voice-select"><span>System voice</span><small>Voices installed on this device</small></label>
         <select id="voice-select"></select>
       </div>
 
+      <div class="setting-row" id="active-model-row">
+        <div class="setting-label"><span>Active model</span><small id="active-model-label">System voice · instant · no download</small></div>
+      </div>
+
       <div class="setting-row">
-        <label for="rate-range">
-          <span>Speaking rate</span>
-          <small id="rate-description">Natural pace</small>
-        </label>
-        <div class="range-setting">
-          <input id="rate-range" type="range" min="0.7" max="1.5" step="0.05" value="1" />
-          <output id="rate-output">1×</output>
-        </div>
+        <label for="rate-range"><span>Speaking rate</span><small id="rate-description">Natural pace</small></label>
+        <div class="range-setting"><input id="rate-range" type="range" min="0.7" max="1.5" step="0.05" value="1" /><output id="rate-output">1×</output></div>
       </div>
 
       <div class="setting-row toggle-row">
-        <label for="follow-toggle">
-          <span>Follow the narration</span>
-          <small>Bring the current paragraph into view</small>
-        </label>
+        <label for="follow-toggle"><span>Follow the narration</span><small>Bring the current paragraph into view</small></label>
         <input id="follow-toggle" class="toggle" type="checkbox" checked />
       </div>
 
-      <div class="setting-row" id="storage-row">
-        <div class="setting-label">
-          <span>Storage & cache</span>
-          <small id="storage-usage-label">Generated audio (IndexedDB) · library & progress (localStorage) · model files (browser cache)</small>
-        </div>
-        <div class="voice-choice storage-actions">
-          <div class="model-cache-manager" id="model-cache-manager">
-            <div class="model-cache-head">
-              <span class="model-cache-title">Saved models</span>
-              <span class="model-cache-total" id="model-cache-total">—</span>
-              <button type="button" id="refresh-model-cache" class="text-button small ghost" aria-label="Refresh saved models">Refresh</button>
-            </div>
-            <div id="model-cache-list" class="model-cache-list" aria-live="polite">
-              <span class="model-cache-empty">Checking saved models…</span>
-            </div>
-            <div class="model-cache-actions">
-              <button type="button" id="clear-model-cache" class="text-button storage-button">Clear saved models</button>
-            </div>
-            <p class="voice-traits model-cache-hint">Models are stored via CacheStorage (<code>kitten-cache</code> · <code>transformers-cache</code> · <code>kokoro-voices</code>). Delete a single file or clear all — next play will re-download.</p>
-          </div>
-          <button type="button" id="clear-audio-cache" class="text-button storage-button">Clear generated audio</button>
-          <button type="button" id="clear-all-data" class="text-button storage-button storage-danger">Clear all Hear data</button>
-          <p class="voice-traits" id="storage-note">No text or audio is sent to a server. “Clear generated audio” wipes hearwiki-tts-cache. “Clear all” also wipes hearwiki:tts-backend / kokoro-device / neural-voice, library, and progress.</p>
-        </div>
-      </div>
+      <button class="advanced-launch" id="advanced-settings-button" type="button">
+        <span><strong>Model &amp; storage</strong><small>Compute, precision, downloads, and saved audio</small></span><span aria-hidden="true">→</span>
+      </button>
 
       <div class="sheet-actions">
         <button id="preview-voice" type="button">Preview voice</button>
         <div class="voice-notes">
-          <p id="voice-note">The first use downloads about 100 MB of model files. Safari caches them locally; the text you listen to never goes to a speech service.</p>
+          <p id="voice-note">System voices start instantly. Natural voices download only after you choose one and press Preview or Play.</p>
           <p class="safari-voice-tip"><strong>Prefer Apple’s voice?</strong> In Safari’s Page menu, choose <em>Listen to Page</em>. This copy is already citation-free.</p>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet advanced-sheet" id="advanced-sheet" aria-labelledby="advanced-sheet-title">
+      <div class="sheet-head">
+        <div><p class="eyebrow">Local voice details</p><h2 id="advanced-sheet-title">Model &amp; storage.</h2></div>
+        <button class="sheet-close" type="button" data-close-dialog aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kokoro-device-row" hidden>
+        <label for="kokoro-device-select"><span>Kokoro compute</span><small id="kokoro-device-help">WASM is stable · WebGPU is experimental</small></label>
+        <div class="voice-choice"><select id="kokoro-device-select"><option value="wasm">WASM · stable</option><option value="webgpu">WebGPU · experimental (fp32)</option></select><p class="voice-traits" id="kokoro-device-note">Explicit and saved per device.</p></div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kokoro-dtype-row" hidden>
+        <label for="kokoro-dtype-select"><span>Kokoro precision</span><small id="kokoro-dtype-help">Changes model size and redownloads</small></label>
+        <div class="voice-choice"><select id="kokoro-dtype-select"><option value="fp32">fp32 · 326 MB</option><option value="fp16">fp16 · 163 MB</option><option value="q8">q8 · 92 MB</option><option value="q4">q4 · 305 MB</option><option value="q4f16">q4f16 · 154 MB</option><option value="uint8">uint8 · 177 MB</option></select><p class="voice-traits" id="kokoro-dtype-note"></p></div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kitten-model-row" hidden>
+        <label for="kitten-model-select"><span>Kitten model</span><small id="kitten-model-help">Nano is the supported default</small></label>
+        <div class="voice-choice"><select id="kitten-model-select"><option value="onnx-community/KittenTTS-Nano-v0.8-ONNX">Nano 0.8 · 15M · fp32 — default</option><option value="KittenML/kitten-tts-mini-0.8">Mini 0.8 · experimental</option><option value="KittenML/kitten-tts-micro-0.8">Micro 0.8 · experimental</option><option value="onnx-community/kitten-tts-nano-0.1-ONNX">Nano 0.1 · legacy</option></select><p class="voice-traits" id="kitten-model-note"></p></div>
+      </div>
+
+      <div class="setting-row voice-select-row" id="kitten-dtype-row" hidden>
+        <label for="kitten-dtype-select"><span>Kitten precision</span><small id="kitten-dtype-help">WASM numeric format</small></label>
+        <div class="voice-choice"><select id="kitten-dtype-select"><option value="fp32">fp32 · full (required)</option></select><p class="voice-traits" id="kitten-dtype-note"></p></div>
+      </div>
+
+      <details class="model-details">
+        <summary>How does the natural voice work?</summary>
+        <p>Choose Kitten or Kokoro explicitly. Hear never benchmarks or downloads a model on page load. Generation, measurements, and cached passages stay on this device.</p>
+        <p>WebGPU is probed only after you choose Kokoro with WebGPU and press Preview or Play. WASM is used if that probe fails.</p>
+        <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX" target="_blank" rel="noreferrer">Kokoro model card and samples ↗</a>
+      </details>
+
+      <div class="setting-row" id="storage-row">
+        <div class="setting-label"><span>Storage &amp; cache</span><small id="storage-usage-label">Checking local storage…</small></div>
+        <div class="voice-choice storage-actions">
+          <div class="model-cache-manager" id="model-cache-manager">
+            <div class="model-cache-head"><span class="model-cache-title">Saved models</span><span class="model-cache-total" id="model-cache-total">—</span><button type="button" id="refresh-model-cache" class="text-button small ghost" aria-label="Refresh saved models">Refresh</button></div>
+            <div id="model-cache-list" class="model-cache-list" aria-live="polite"><span class="model-cache-empty">Checking saved models…</span></div>
+            <div class="model-cache-actions"><button type="button" id="clear-model-cache" class="text-button storage-button">Clear saved models</button></div>
+            <p class="voice-traits model-cache-hint">Model files remain in browser cache until removed or reclaimed by the browser.</p>
+          </div>
+          <button type="button" id="clear-audio-cache" class="text-button storage-button">Clear generated audio</button>
+          <button type="button" id="clear-all-data" class="text-button storage-button storage-danger">Clear all Hear data</button>
+          <p class="voice-traits" id="storage-note">No text or audio is sent to a speech service.</p>
         </div>
       </div>
     </dialog>
@@ -497,8 +407,11 @@
         </button>
       </div>
       <div class="neural-promise">
-        <div class="download-size"><strong>~100</strong><span>MB once</span></div>
-        <p>Hear will download an open neural voice and generate each passage on your iPhone or Mac. Nothing is uploaded, and the resulting audio appears in iOS Control Center like a podcast.</p>
+        <div class="download-size"><strong id="neural-download-size">—</strong><span id="neural-download-unit">MB once</span></div>
+        <div>
+          <p id="neural-download-model">Preparing the selected local model…</p>
+          <small id="neural-download-storage">Checking available browser storage…</small>
+        </div>
       </div>
       <div class="neural-actions">
         <button id="download-neural" type="button">Download &amp; listen</button>
@@ -526,7 +439,7 @@
       <button class="copy-shortcut" id="copy-bookmarklet" type="button">Copy shortcut code</button>
     </dialog>
 
-    <div class="loading-view" id="loading-view" hidden role="status" aria-live="polite">
+    <div class="loading-view" id="loading-view" hidden aria-busy="true">
       <div class="loading-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
       <p id="loading-title">Editing for your ears…</p>
       <span id="loading-detail">Removing citations and references</span>

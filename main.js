@@ -6,11 +6,23 @@ import {
   getCachedWork,
   loadGutenbergWork,
   loadStandardWork,
-  parseEpub,
   removeCachedWork,
 } from "./library.js";
+import {
+  KITTEN_DTYPES,
+  KITTEN_MODELS,
+  KITTEN_VOICES,
+  KOKORO_DTYPES,
+  KOKORO_MODEL,
+  formatMegabytes,
+  getModelDownloadDetails,
+} from "./app-config.js";
+import { parseEpubInWorker } from "./epub-client.js";
+import { fetchWithTimeout, isAbortError } from "./fetch-utils.js";
+import { libraryRouteState, routeForWork, routeStateForWork } from "./route-utils.js";
+import { registerHearServiceWorker } from "./pwa.js";
 import { KokoroWebGPU, KokoroWasm, KittenWasm } from "./tts-backends.js";
-import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, getTtsCacheCount, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
+import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, getTtsCacheStats, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
 import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -74,6 +86,7 @@ const elements = {
   elapsedTime: $("#elapsed-time"),
   totalTime: $("#total-time"),
   nowSection: $("#now-section"),
+  playerAnnouncement: $("#player-announcement"),
   nowTitle: $("#now-title"),
   miniCover: $("#mini-cover"),
   miniCoverImage: $("#mini-cover-image"),
@@ -82,6 +95,8 @@ const elements = {
   voiceName: $("#voice-name"),
   voiceType: $("#voice-type"),
   voiceSheet: $("#voice-sheet"),
+  advancedSheet: $("#advanced-sheet"),
+  advancedSettingsButton: $("#advanced-settings-button"),
   chaptersButton: $("#chapters-button"),
   chaptersSheet: $("#chapters-sheet"),
   chaptersSheetTitle: $("#chapters-sheet-title"),
@@ -91,14 +106,10 @@ const elements = {
   voiceTraits: $("#voice-traits"),
   naturalVoiceRow: $("#natural-voice-row"),
   systemVoiceRow: $("#system-voice-row"),
-  autoEngine: $("#auto-engine"),
   kokoroEngine: $("#kokoro-engine"),
   kittenEngine: $("#kitten-engine"),
   systemEngine: $("#system-engine"),
   engineDescription: $("#engine-description"),
-  neuralBackendSelect: $("#neural-backend-select"),
-  neuralBackendRow: $("#neural-backend-row"),
-  neuralBackendNote: $("#neural-backend-note"),
   kokoroDeviceSelect: $("#kokoro-device-select"),
   kokoroDeviceRow: $("#kokoro-device-row"),
   kokoroDeviceNote: $("#kokoro-device-note"),
@@ -130,6 +141,10 @@ const elements = {
   followToggle: $("#follow-toggle"),
   previewVoice: $("#preview-voice"),
   neuralSheet: $("#neural-sheet"),
+  neuralDownloadSize: $("#neural-download-size"),
+  neuralDownloadUnit: $("#neural-download-unit"),
+  neuralDownloadModel: $("#neural-download-model"),
+  neuralDownloadStorage: $("#neural-download-storage"),
   downloadNeural: $("#download-neural"),
   setupButton: $("#setup-button"),
   setupSheet: $("#setup-sheet"),
@@ -158,8 +173,6 @@ const NATURAL_VOICES = {
   bm_fable: { name: "Fable", note: "Characterful British voice · suited to storytelling" },
   am_michael: { name: "Michael", note: "Grounded American voice · steady, lower narration" },
 };
-const NEURAL_INIT_STALL_MS = 120_000;
-const NEURAL_GENERATION_TIMEOUT_MS = 120_000;
 const AUDIO_LOAD_TIMEOUT_MS = 15_000;
 const EXCLUDED_SECTIONS = new Set([
   "see also",
@@ -261,7 +274,6 @@ const rawKokoroDevice = localStorage.getItem(`${STORAGE_PREFIX}kokoro-device`);
 const initialKokoroDevice = rawKokoroDevice === "webgpu" ? "webgpu" : "wasm";
 const rawKokoroDtype = localStorage.getItem(`${STORAGE_PREFIX}kokoro-dtype`);
 const KOKORO_DTYPE_DEFAULT = "q8";
-const KOKORO_DTYPES = ["fp32", "fp16", "q8", "q4", "q4f16", "uint8"];
 // Migration: older installs may have stored q8f16/uint8f16 which transformers rejects (Invalid dtype)
 if (rawKokoroDtype === "q8f16" || rawKokoroDtype === "uint8f16") {
   localStorage.setItem(`${STORAGE_PREFIX}kokoro-dtype`, KOKORO_DTYPE_DEFAULT);
@@ -269,22 +281,14 @@ if (rawKokoroDtype === "q8f16" || rawKokoroDtype === "uint8f16") {
 const _migratedKokoroDtype = localStorage.getItem(`${STORAGE_PREFIX}kokoro-dtype`);
 const initialKokoroDtype = KOKORO_DTYPES.includes(_migratedKokoroDtype) ? _migratedKokoroDtype : KOKORO_DTYPE_DEFAULT;
 const rawKittenModel = localStorage.getItem(`${STORAGE_PREFIX}kitten-model`);
-const KITTEN_MODELS = [
-  "onnx-community/KittenTTS-Nano-v0.8-ONNX",
-  "KittenML/kitten-tts-mini-0.8",
-  "KittenML/kitten-tts-micro-0.8",
-  "onnx-community/kitten-tts-nano-0.1-ONNX",
-];
 const initialKittenModel = KITTEN_MODELS.includes(rawKittenModel) ? rawKittenModel : KITTEN_MODELS[0];
 const rawKittenDtype = localStorage.getItem(`${STORAGE_PREFIX}kitten-dtype`);
-const KITTEN_DTYPES = ["fp32"];
 // Migration: older installs may have stored fp16/q8/q4 which Kitten Nano 0.8 does not ship
 if (rawKittenDtype && !KITTEN_DTYPES.includes(rawKittenDtype)) {
   localStorage.setItem(`${STORAGE_PREFIX}kitten-dtype`, "fp32");
 }
 const initialKittenDtype = KITTEN_DTYPES.includes(rawKittenDtype) ? rawKittenDtype : "fp32";
 const rawKittenVoice = localStorage.getItem(`${STORAGE_PREFIX}kitten-voice`);
-const KITTEN_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"];
 const initialKittenVoice = KITTEN_VOICES.includes(rawKittenVoice) ? rawKittenVoice : "Bella";
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 function supportsWebGPU() {
@@ -304,23 +308,13 @@ const state = {
   kittenVoice: initialKittenVoice,
   engine: initialBackendPreference === "system" ? "system" : "neural",
   activeBackendId: null,
-  activeBackendModel: null,
-  activeBackendDevice: null,
   ttsBackend: null,
   generationEpoch: 0,
   rtfSamples: [],
   bufferFillPromise: null,
   neuralVoice: localStorage.getItem(`${STORAGE_PREFIX}neural-voice`) || "af_heart",
-  neuralWorker: null,
   neuralReady: false,
-  neuralInitPromise: null,
-  neuralInitResolve: null,
-  neuralInitReject: null,
-  neuralInitTimer: null,
-  neuralShowLoading: false,
-  neuralRequests: new Map(),
   neuralCache: new Map(),
-  neuralRequestId: 0,
   neuralRunId: 0,
   currentSegmentIndex: 0,
   currentAudioUrl: null,
@@ -346,6 +340,13 @@ const state = {
   catalogPage: 1,
   catalogItems: [],
   catalogRequestId: 0,
+  catalogAbortController: null,
+  contentAbortController: null,
+  contentRequestId: 0,
+  artworkAbortController: null,
+  artworkObjectUrl: null,
+  lastAnnouncement: "",
+  lastAnnouncementAt: 0,
   chapters: [],
 };
 
@@ -404,6 +405,19 @@ function coverColor(item) {
   return colors[seed % colors.length];
 }
 
+function canDisplayImage(item) {
+  if (!item?.image) return false;
+  try {
+    const url = new URL(item.image, location.href);
+    // Public cover hosts are inconsistent under WebKit's COOP/COEP enforcement.
+    // Use the designed typographic fallback instead of producing blocked loads.
+    if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 function renderBookCard(item, { removable = false } = {}) {
   const wrapper = document.createElement("article");
   wrapper.className = "book-item";
@@ -415,7 +429,7 @@ function renderBookCard(item, { removable = false } = {}) {
   const cover = document.createElement("span");
   cover.className = "book-cover";
   cover.style.setProperty("--cover-hue", coverColor(item));
-  if (item.image) {
+  if (canDisplayImage(item)) {
     const image = document.createElement("img");
     image.crossOrigin = "anonymous";
     image.src = item.image;
@@ -508,9 +522,13 @@ function interleave(left, right, limit = 30) {
 
 async function loadCatalog({ append = false } = {}) {
   if (state.catalogSource === "saved") {
+    state.catalogAbortController?.abort();
     renderSavedLibrary();
     return;
   }
+  state.catalogAbortController?.abort();
+  const controller = new AbortController();
+  state.catalogAbortController = controller;
   const requestId = ++state.catalogRequestId;
   if (!append) {
     state.catalogPage = 1;
@@ -523,13 +541,13 @@ async function loadCatalog({ append = false } = {}) {
   try {
     let items;
     if (state.catalogSource === "standard") {
-      items = await fetchStandardCatalog({ query, page: state.catalogPage, limit: 24 });
+      items = await fetchStandardCatalog({ query, page: state.catalogPage, limit: 24, signal: controller.signal });
     } else if (state.catalogSource === "gutenberg") {
-      items = await fetchGutenbergCatalog({ query, page: state.catalogPage });
+      items = await fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal });
     } else {
       const results = await Promise.allSettled([
-        fetchStandardCatalog({ query, page: state.catalogPage, limit: 15 }),
-        fetchGutenbergCatalog({ query, page: state.catalogPage }),
+        fetchStandardCatalog({ query, page: state.catalogPage, limit: 15, signal: controller.signal }),
+        fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal }),
       ]);
       if (results.every((result) => result.status === "rejected")) throw results[0].reason;
       const standard = results[0].status === "fulfilled" ? results[0].value : [];
@@ -547,7 +565,10 @@ async function loadCatalog({ append = false } = {}) {
     elements.loadMore.hidden = items.length < 10;
   } catch (error) {
     if (requestId !== state.catalogRequestId) return;
+    if (isAbortError(error)) return;
     elements.catalogStatus.textContent = error.message || "The public libraries could not be reached.";
+  } finally {
+    if (state.catalogAbortController === controller) state.catalogAbortController = null;
   }
 }
 
@@ -576,7 +597,7 @@ function updateContinueListening() {
   elements.continueProgress.style.width = `${ratio * 100}%`;
   elements.continueLabel.textContent = `${Math.round(ratio * 100)}% listened · resume`;
   const fallback = $("i", elements.continueCover);
-  if (entry.image) {
+  if (canDisplayImage(entry)) {
     elements.continueImage.src = entry.image;
     elements.continueImage.hidden = false;
     fallback.hidden = true;
@@ -631,81 +652,123 @@ function showReaderView({ scrollTop = true } = {}) {
   elements.reader.hidden = false;
   elements.libraryButton.hidden = false;
   elements.importButton.hidden = true;
-  elements.shareButton.hidden = false;
+  elements.shareButton.hidden = state.article.source === "local";
   elements.siteHeader.dataset.condensed = "true";
   document.body.classList.remove("library-open");
   document.title = `${state.article.title} — Hear`;
   if (scrollTop) window.scrollTo({ top: 0, behavior: "instant" });
 }
 
-async function openLibraryItem(item) {
+function navigateToLibrary({ historyMode = "push", scrollTop = true } = {}) {
+  state.contentAbortController?.abort();
+  showLibraryView({ scrollTop });
+  const method = historyMode === "replace" ? "replaceState" : historyMode === "push" ? "pushState" : null;
+  if (method) history[method](libraryRouteState(), "", location.pathname);
+}
+
+function beginContentTask(title, detail) {
+  state.contentAbortController?.abort();
+  const controller = new AbortController();
+  const requestId = ++state.contentRequestId;
+  state.contentAbortController = controller;
+  elements.loadingTitle.textContent = title;
+  elements.loadingDetail.textContent = detail;
+  elements.loadingProgress.hidden = true;
+  elements.loadingCancel.hidden = false;
+  elements.loadingView.dataset.kind = "content";
+  elements.loadingView.hidden = false;
+  setLoadingIsolation(true);
+  announcePlayerStatus(`${title} ${detail}`, { force: true });
+  return { controller, requestId };
+}
+
+function finishContentTask(controller, requestId) {
+  if (state.contentAbortController !== controller || requestId !== state.contentRequestId) return;
+  state.contentAbortController = null;
+  hideLoading();
+}
+
+async function openLibraryItem(item, options = {}) {
   const key = item.key || item.id;
   const cached = await getCachedWork(key).catch(() => null);
   if (cached) {
-    activateWork(cached);
+    activateWork(cached, options);
     return;
   }
   if (item.kind === "article") {
-    loadArticle(`${item.lang || "en"}:${item.title}`);
+    loadArticle(`${item.lang || "en"}:${item.title}`, options);
     return;
   }
   if (item.source === "local") {
     showToast("This EPUB is no longer in browser storage. Import the file again.");
     return;
   }
-  loadCatalogItem(item.catalogItem || item);
+  loadCatalogItem(item.catalogItem || item, options);
 }
 
-async function loadCatalogItem(item) {
+async function loadCatalogItem(item, { historyMode = "push" } = {}) {
   stopSpeech("idle");
   clearNeuralCache();
-  elements.loadingView.hidden = false;
-  elements.loadingProgress.hidden = true;
-  elements.loadingTitle.textContent = `Opening ${item.title}…`;
-  elements.loadingDetail.textContent = `Connecting to ${item.sourceLabel}`;
+  const { controller, requestId } = beginContentTask(`Opening ${item.title}…`, `Connecting to ${item.sourceLabel}`);
   try {
     const cached = await getCachedWork(item.id).catch(() => null);
     let resolvedItem = item;
     if (!cached && item.source === "standard" && !item.downloadUrl) {
       elements.loadingDetail.textContent = "Opening the Standard Ebooks edition";
-      resolvedItem = await fetchStandardItemFromSlug(item.id.replace(/^standard:/, ""));
+      resolvedItem = await fetchStandardItemFromSlug(item.id.replace(/^standard:/, ""), { signal: controller.signal });
     }
     const work = cached || (resolvedItem.source === "standard"
-      ? await loadStandardWork(resolvedItem, (message) => { elements.loadingDetail.textContent = message; })
-      : await loadGutenbergWork(resolvedItem, (message) => { elements.loadingDetail.textContent = message; }));
+      ? await loadStandardWork(
+        resolvedItem,
+        (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
+        { signal: controller.signal, parse: parseEpubInWorker },
+      )
+      : await loadGutenbergWork(
+        resolvedItem,
+        (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
+        { signal: controller.signal },
+      ));
+    if (controller.signal.aborted || requestId !== state.contentRequestId) return;
     if (!cached) await cacheWork(work).catch(() => {});
-    activateWork(work);
+    activateWork(work, { historyMode });
   } catch (error) {
+    if (isAbortError(error)) return;
     showToast(error.message || "That book could not be opened.");
   } finally {
-    hideLoading();
+    finishContentTask(controller, requestId);
   }
 }
 
-async function importEpub(file) {
+async function importEpub(file, { historyMode = "push" } = {}) {
   if (!file) return;
   if (!/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") {
     showToast("Choose a DRM-free EPUB file.");
     return;
   }
-  elements.loadingView.hidden = false;
-  elements.loadingProgress.hidden = true;
-  elements.loadingTitle.textContent = `Opening ${file.name}…`;
-  elements.loadingDetail.textContent = "Finding the book’s reading order";
+  if (file.size > 100 * 1024 * 1024) {
+    showToast("That EPUB is over the 100 MB import limit.");
+    return;
+  }
+  const { controller, requestId } = beginContentTask(`Opening ${file.name}…`, "Checking the EPUB archive");
   try {
     const key = `local:${file.name}:${file.size}:${file.lastModified}`;
-    const work = await parseEpub(await file.arrayBuffer(), {
-      key,
-      source: "local",
-      sourceLabel: "My EPUB",
-    });
+    const work = await parseEpubInWorker(
+      await file.arrayBuffer(),
+      { key, source: "local", sourceLabel: "My EPUB" },
+      {
+        signal: controller.signal,
+        onStatus: (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
+      },
+    );
+    if (controller.signal.aborted || requestId !== state.contentRequestId) return;
     await cacheWork(work).catch(() => {});
-    activateWork(work);
+    activateWork(work, { historyMode });
   } catch (error) {
+    if (isAbortError(error)) return;
     showToast(error.message || "That EPUB could not be opened.");
   } finally {
     elements.epubInput.value = "";
-    hideLoading();
+    finishContentTask(controller, requestId);
   }
 }
 
@@ -828,7 +891,7 @@ function articleImageFromSummary(summary) {
   return summary?.originalimage?.source || "";
 }
 
-async function fetchArticle(title, language, allowSearch = true) {
+async function fetchArticle(title, language, allowSearch = true, { signal } = {}) {
   const lang = safeLanguage(language);
   const key = encodeURIComponent(title.trim().replaceAll(" ", "_"));
   const origin = `https://${lang}.wikipedia.org`;
@@ -836,19 +899,22 @@ async function fetchArticle(title, language, allowSearch = true) {
   const summaryUrl = `${origin}/api/rest_v1/page/summary/${key}`;
 
   const [htmlResponse, summaryResponse] = await Promise.all([
-    fetch(htmlUrl, { headers: { Accept: "text/html" } }),
-    fetch(summaryUrl, { headers: { Accept: "application/json" } }).catch(() => null),
+    fetchWithTimeout(htmlUrl, { headers: { Accept: "text/html" }, signal }),
+    fetchWithTimeout(summaryUrl, { headers: { Accept: "application/json" }, signal }).catch((error) => {
+      if (isAbortError(error)) throw error;
+      return null;
+    }),
   ]);
 
   if (!htmlResponse.ok) {
     if (htmlResponse.status === 404 && allowSearch) {
       const searchUrl = `${origin}/w/rest.php/v1/search/title?q=${encodeURIComponent(title)}&limit=1`;
-      const searchResponse = await fetch(searchUrl);
+      const searchResponse = await fetchWithTimeout(searchUrl, { signal });
       if (searchResponse.ok) {
         const searchData = await searchResponse.json();
         const result = searchData.pages?.[0];
         if (result?.key || result?.title) {
-          return fetchArticle(result.key || result.title, lang, false);
+          return fetchArticle(result.key || result.title, lang, false, { signal });
         }
       }
     }
@@ -1149,6 +1215,60 @@ function neuralSegmentIndexForChunk(chunkIndex) {
   return low;
 }
 
+function showArtworkFallback(article) {
+  elements.articleImage.removeAttribute("src");
+  elements.imageWrap.hidden = true;
+  elements.articlePlaceholder.hidden = false;
+  elements.articlePlaceholder.querySelector("span").textContent = article.title[0]?.toUpperCase() || "W";
+  elements.miniCoverImage.removeAttribute("src");
+  elements.miniCoverImage.hidden = true;
+  $("span", elements.miniCover).hidden = false;
+  $("span", elements.miniCover).textContent = article.title[0]?.toUpperCase() || "W";
+}
+
+async function renderArticleArtwork(article) {
+  state.artworkAbortController?.abort();
+  if (state.artworkObjectUrl) URL.revokeObjectURL(state.artworkObjectUrl);
+  state.artworkObjectUrl = null;
+  showArtworkFallback(article);
+  if (!article.image || article.source === "standard") return;
+  if (crossOriginIsolated && /^https?:/i.test(article.image)) return;
+
+  const controller = new AbortController();
+  state.artworkAbortController = controller;
+  let source = article.image;
+  try {
+    const url = new URL(source, location.href);
+    if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) {
+      // Fetch as CORS, then display a same-origin blob URL in browsers that
+      // permit it under COEP, while preserving Wikimedia attribution.
+      const response = await fetchWithTimeout(url, { mode: "cors", signal: controller.signal }, 15_000);
+      if (!response.ok) throw new Error("Artwork unavailable");
+      source = URL.createObjectURL(await response.blob());
+    }
+    if (controller.signal.aborted || state.article?.key !== article.key) {
+      if (source.startsWith("blob:")) URL.revokeObjectURL(source);
+      return;
+    }
+    if (source.startsWith("blob:")) state.artworkObjectUrl = source;
+    elements.articleImage.src = source;
+    elements.articleImage.alt = article.kind === "book" ? `Cover of ${article.title}` : `Lead image for ${article.title}`;
+    elements.imageCaption.textContent = article.kind === "book"
+      ? `Cover from ${article.sourceLabel}`
+      : `Image from ${article.lang}.wikipedia.org`;
+    elements.imageWrap.hidden = false;
+    elements.articlePlaceholder.hidden = true;
+    elements.miniCoverImage.src = source;
+    elements.miniCoverImage.hidden = false;
+    $("span", elements.miniCover).hidden = true;
+    updateMediaMetadata();
+  } catch (error) {
+    if (!isAbortError(error)) showArtworkFallback(article);
+  } finally {
+    if (state.artworkAbortController === controller) state.artworkAbortController = null;
+  }
+}
+
 function renderArticle(article) {
   elements.reader.dataset.kind = article.kind;
   elements.articleTitle.textContent = article.title;
@@ -1174,25 +1294,7 @@ function renderArticle(article) {
   elements.wordCountLabel.textContent = `${count.toLocaleString()} words`;
   elements.totalTime.textContent = formatTime((count / WORDS_PER_MINUTE / state.rate) * 60);
 
-  if (article.image) {
-    elements.articleImage.src = article.image;
-    elements.articleImage.alt = article.kind === "book" ? `Cover of ${article.title}` : `Lead image for ${article.title}`;
-    elements.imageCaption.textContent = article.kind === "book"
-      ? `Cover from ${article.sourceLabel}`
-      : `Image from ${article.lang}.wikipedia.org`;
-    elements.imageWrap.hidden = false;
-    elements.articlePlaceholder.hidden = true;
-    elements.miniCoverImage.src = article.image;
-    elements.miniCoverImage.hidden = false;
-    $("span", elements.miniCover).hidden = true;
-  } else {
-    elements.imageWrap.hidden = true;
-    elements.articlePlaceholder.hidden = false;
-    elements.articlePlaceholder.querySelector("span").textContent = article.title[0]?.toUpperCase() || "W";
-    elements.miniCoverImage.hidden = true;
-    $("span", elements.miniCover).hidden = false;
-    $("span", elements.miniCover).textContent = article.title[0]?.toUpperCase() || "W";
-  }
+  renderArticleArtwork(article);
 
   elements.articleCopy.replaceChildren();
   let currentList = null;
@@ -1317,9 +1419,6 @@ function updateEngineUI() {
     state.engine = "system";
     state.backendPreference = "system";
   }
-  // Auto is deprecated – hide it and make the choice explicit.
-  if (elements.autoEngine) elements.autoEngine.hidden = true;
-  if (elements.neuralBackendRow) elements.neuralBackendRow.hidden = true;
   const isNeural = state.engine === "neural";
   // Explicit device/dtype selectors – both engines now fully explicit.
   const showKokoro = state.backendPreference === "kokoro";
@@ -1347,8 +1446,8 @@ function updateEngineUI() {
     elements.kokoroDtypeRow.hidden = !showKokoro;
     if (elements.kokoroDtypeSelect) elements.kokoroDtypeSelect.value = state.kokoroDtype;
     if (elements.kokoroDtypeNote) {
-      const sizeMap = { fp32: "326 MB", fp16: "163 MB", q8: "92 MB", q4: "305 MB", q4f16: "154 MB", uint8: "177 MB" };
-      elements.kokoroDtypeNote.textContent = `Kokoro 82M · ${state.kokoroDtype} · ${sizeMap[state.kokoroDtype] || ""} · saved as hearwiki:kokoro-dtype. Device=${state.kokoroDevice}.`;
+      const details = getModelDownloadDetails({ backend: "kokoro", kokoroDevice: state.kokoroDevice, kokoroDtype: state.kokoroDtype });
+      elements.kokoroDtypeNote.textContent = `${KOKORO_MODEL} · ${details.label} · ${formatMegabytes(details.sizeMb)} · saved on this device.`;
     }
   }
   if (elements.kittenModelRow) {
@@ -1366,15 +1465,15 @@ function updateEngineUI() {
     let label = "";
     if (!isNeural) label = "System voice · instant · no download";
     else if (state.activeBackendId === "kitten-wasm") label = `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenModel} · ${state.kittenDtype} · WASM`;
-    else if (state.activeBackendId === "kokoro-webgpu") label = `Kokoro 82M v1.0 · ${state.kokoroDtype} · WebGPU`;
-    else if (state.activeBackendId === "kokoro-wasm") label = `Kokoro 82M v1.0 · ${state.kokoroDtype} · WASM`;
+    else if (state.activeBackendId === "kokoro-webgpu") label = `${KOKORO_MODEL} · fp32 · WebGPU`;
+    else if (state.activeBackendId === "kokoro-wasm") label = `${KOKORO_MODEL} · ${state.kokoroDtype} · WASM`;
     else if (state.backendPreference === "kitten") label = `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenModel} · ${state.kittenDtype} · WASM · will load on play`;
-    else if (state.backendPreference === "kokoro") label = `Kokoro 82M v1.0 · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"} · will load on play`;
+    else if (state.backendPreference === "kokoro") label = `${KOKORO_MODEL} · ${state.kokoroDevice === "webgpu" ? "fp32" : state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"} · will load on play`;
     else label = "System voice · explicit choice saved";
     elements.activeModelLabel.textContent = label;
     elements.activeModelLabel.title = label;
   }
-  for (const [choice, element] of [["auto", elements.autoEngine], ["kokoro", elements.kokoroEngine], ["kitten", elements.kittenEngine], ["system", elements.systemEngine]]) {
+  for (const [choice, element] of [["kokoro", elements.kokoroEngine], ["kitten", elements.kittenEngine], ["system", elements.systemEngine]]) {
     if (!element || element.hidden) continue;
     element.setAttribute("aria-pressed", String(state.backendPreference === choice));
     element.disabled = choice !== "system" && !naturalVoiceAvailable();
@@ -1416,27 +1515,63 @@ function updateEngineUI() {
       ? `Kitten · ${state.kittenModel} · ${state.kittenDtype} · WASM · explicit choice`
       : state.backendPreference === "kokoro"
         ? `Kokoro · onnx-community/Kokoro-82M-v1.0-ONNX · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"} · explicit choice`
-        : state.backendPreference === "auto"
-          ? "Auto is disabled – pick Kitten or Kokoro explicitly"
-          : "Explicit choice saved – pick Kitten (efficient) or Kokoro (natural) — no auto download"
+        : "Explicit choice saved – pick Kitten (efficient) or Kokoro (natural) — no auto download"
     : "Natural voice currently supports English works";
   elements.voiceNote.textContent = isNeural
-    ? "Explicit engine saved. The first play after you pick Kitten/Kokoro may download ~60–100 MB; nothing is downloaded until you choose. Measurements and generated passages stay on this device."
+    ? `${getModelDownloadDetails({ backend: state.backendPreference, kokoroDevice: state.kokoroDevice, kokoroDtype: state.kokoroDtype, kittenModel: state.kittenModel }).label}. The first play may download ${formatMegabytes(getModelDownloadDetails({ backend: state.backendPreference, kokoroDevice: state.kokoroDevice, kokoroDtype: state.kokoroDtype, kittenModel: state.kittenModel }).sizeMb)}; generated passages stay on this device.`
     : "System voices start instantly (no download). Choose Kitten (15M, fast) or Kokoro (82M, higher fidelity) to save an explicit local model choice.";
   elements.naturalVoiceSelect.value = state.neuralVoice;
   elements.voiceTraits.textContent = NATURAL_VOICES[state.neuralVoice]?.note || NATURAL_VOICES.af_heart.note;
-  refreshStorageLabel();
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024).toLocaleString()} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 async function refreshStorageLabel() {
   if (!elements.storageUsageLabel) return;
   try {
-    const count = await getTtsCacheCount().catch(() => null);
-    const suffix = Number.isFinite(count) ? ` · ${count} cached segment${count === 1 ? "" : "s"} in IndexedDB` : "";
-    elements.storageUsageLabel.textContent = `Generated audio (IndexedDB) · library & progress (localStorage) · model files (browser cache)${suffix}`;
-    if (elements.storageNote) elements.storageNote.textContent = `No text or audio is sent to a server. “Clear generated audio” wipes hearwiki-tts-cache${Number.isFinite(count) && count ? ` (${count} segments)` : ""}. “Clear all” also wipes hearwiki:tts-backend / kokoro-device / neural-voice, library, and progress.`;
+    const estimatePromise = navigator.storage?.estimate
+      ? navigator.storage.estimate().catch(() => null)
+      : Promise.resolve(null);
+    const [stats, estimate] = await Promise.all([
+      getTtsCacheStats().catch(() => null),
+      estimatePromise,
+    ]);
+    const audio = stats ? `${formatBytes(stats.bytes)} generated audio · ${stats.count} segment${stats.count === 1 ? "" : "s"}` : "Generated-audio size unavailable";
+    const browser = estimate?.usage !== undefined && estimate?.quota !== undefined
+      ? `browser storage ${formatBytes(estimate.usage)} of ${formatBytes(estimate.quota)}`
+      : "browser quota unavailable";
+    elements.storageUsageLabel.textContent = `${audio} · ${browser}`;
+    if (elements.storageNote) elements.storageNote.textContent = `No text or audio is sent to a server. Generated audio is capped at 256 MB and least-recently-used passages are removed first. “Clear all” also removes voice choices, library, progress, and saved models.`;
   } catch {}
-  refreshModelCacheUI().catch(() => {});
+  await refreshModelCacheUI().catch(() => {});
+}
+
+async function updateNeuralDownloadSheet() {
+  const details = getModelDownloadDetails({
+    backend: state.backendPreference,
+    kokoroDevice: state.kokoroDevice,
+    kokoroDtype: state.kokoroDtype,
+    kittenModel: state.kittenModel,
+  });
+  elements.neuralDownloadSize.textContent = String(details.sizeMb);
+  elements.neuralDownloadUnit.textContent = details.estimated ? "MB estimate" : "MB once";
+  elements.neuralDownloadModel.textContent = `${details.label}. Downloaded only after you confirm; synthesis remains on this device.`;
+  elements.neuralDownloadStorage.textContent = "Checking available browser storage…";
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    if (estimate?.quota !== undefined && estimate?.usage !== undefined) {
+      elements.neuralDownloadStorage.textContent = `${formatBytes(Math.max(0, estimate.quota - estimate.usage))} currently available in this browser.`;
+    } else {
+      elements.neuralDownloadStorage.textContent = "Your browser manages the model cache and may reclaim it when space is low.";
+    }
+  } catch {
+    elements.neuralDownloadStorage.textContent = "Your browser manages the model cache and may reclaim it when space is low.";
+  }
 }
 
 async function refreshModelCacheUI() {
@@ -1490,6 +1625,7 @@ async function refreshModelCacheUI() {
         del.textContent = "…";
         try {
           await deleteCacheEntry(entry.cacheName, entry.url);
+          clearModelConsentRecords();
           // Reset worker so next play re-fetches cleanly
           await resetNeuralWorker(new Error("Model cache entry deleted")).catch(() => {});
           clearNeuralCache();
@@ -1511,6 +1647,13 @@ async function refreshModelCacheUI() {
   }
 }
 
+function clearModelConsentRecords() {
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(`${STORAGE_PREFIX}model-consent:`)) localStorage.removeItem(key);
+  }
+}
+
 async function handleClearModelCache() {
   const btn = elements.clearModelCache;
   if (btn) btn.disabled = true;
@@ -1520,6 +1663,7 @@ async function handleClearModelCache() {
   }
   try {
     await clearAllModelCaches();
+    clearModelConsentRecords();
     await resetNeuralWorker(new Error("Model caches cleared")).catch(() => {});
     clearNeuralCache();
     showToast("Saved models cleared — next play will re-download");
@@ -1586,13 +1730,8 @@ async function handleClearAllData() {
   }
 }
 
-function legacyClearNeuralCache() {
-  for (const entry of state.neuralCache.values()) URL.revokeObjectURL(entry.url);
-  state.neuralCache.clear();
-  state.currentAudioUrl = null;
-}
-
 function setNeuralLoading(progress = null, detail = "Loading the natural voice") {
+  const wasHidden = elements.loadingView.hidden;
   elements.loadingTitle.textContent = "Preparing your natural voice…";
   elements.loadingDetail.textContent = detail;
   elements.loadingProgress.hidden = progress === null;
@@ -1602,6 +1741,14 @@ function setNeuralLoading(progress = null, detail = "Loading the natural voice")
   elements.loadingCancel.hidden = false;
   elements.loadingView.dataset.kind = "voice";
   elements.loadingView.hidden = false;
+  if (wasHidden) setLoadingIsolation(true);
+}
+
+function setLoadingIsolation(active) {
+  [elements.siteHeader, $("main"), elements.player, ...$$("dialog")].forEach((element) => {
+    if (element) element.inert = active;
+  });
+  if (active) requestAnimationFrame(() => elements.loadingCancel.focus({ preventScroll: true }));
 }
 
 function hideLoading() {
@@ -1610,265 +1757,7 @@ function hideLoading() {
   elements.loadingProgress.style.setProperty("--download-progress", "0%");
   elements.loadingCancel.hidden = true;
   elements.loadingView.dataset.kind = "";
-}
-
-function clearNeuralInitTimer() {
-  window.clearTimeout(state.neuralInitTimer);
-  state.neuralInitTimer = null;
-}
-
-function legacyResetNeuralWorker(error = new Error("The natural voice engine was reset.")) {
-  clearNeuralInitTimer();
-  const worker = state.neuralWorker;
-  state.neuralWorker = null;
-  state.neuralReady = false;
-  state.neuralShowLoading = false;
-  worker?.terminate();
-
-  const rejectInitialization = state.neuralInitReject;
-  state.neuralInitPromise = null;
-  state.neuralInitResolve = null;
-  state.neuralInitReject = null;
-  rejectInitialization?.(error);
-
-  for (const request of state.neuralRequests.values()) {
-    window.clearTimeout(request.timer);
-    request.reject(error);
-  }
-  state.neuralRequests.clear();
-  hideLoading();
-  // If init never succeeded (no NEURAL_MODEL_KEY persistence yet) don't leave a stale
-  // "downloaded" flag that makes every refresh show "Downloading…".
-  // Only clear the flag when the worker failed during initial download – keep it if
-  // we had previously succeeded and just restarted.
-  if (error && !state.neuralReady) {
-    // If the error happened during the first download, clear the stored version
-    // so we don't think we're cached on next reload. If we were previously
-    // ready, keep the flag – the cache may still be valid.
-    const hadPreviousSuccess = localStorage.getItem(NEURAL_MODEL_KEY) === NEURAL_MODEL_VERSION;
-    if (!hadPreviousSuccess) {
-      // No-op: key already not set.
-    } else if (error.message && /download|network|fetch/i.test(error.message)) {
-      // Keep key; fetch may transiently fail. Don't churn localStorage.
-    }
-  }
-}
-
-function armNeuralInitTimer(worker) {
-  clearNeuralInitTimer();
-  state.neuralInitTimer = window.setTimeout(() => {
-    if (worker !== state.neuralWorker || state.neuralReady) return;
-    const error = new Error("The natural voice stopped responding while it was starting.");
-    error.name = "TimeoutError";
-    error.recoverable = true;
-    resetNeuralWorker(error);
-  }, NEURAL_INIT_STALL_MS);
-}
-
-function legacyEnsureNeuralWorker({ background = false } = {}) {
-  if (state.neuralReady && state.neuralWorker) return Promise.resolve();
-  if (state.neuralReady && !state.neuralWorker) state.neuralReady = false;
-  if (state.neuralInitPromise) {
-    if (!background) {
-      state.neuralShowLoading = true;
-      setNeuralLoading(null, "Finishing the private voice engine");
-    }
-    return state.neuralInitPromise;
-  }
-
-  const worker = new Worker(new URL("./tts-worker.js", import.meta.url), { type: "module" });
-  state.neuralWorker = worker;
-  state.neuralShowLoading = !background;
-  state.neuralInitPromise = new Promise((resolve, reject) => {
-    state.neuralInitResolve = resolve;
-    state.neuralInitReject = reject;
-  });
-
-  worker.addEventListener("message", (event) => {
-    if (worker !== state.neuralWorker) return;
-    const message = event.data;
-    if (message.type === "progress") {
-      armNeuralInitTimer(worker);
-      if (message.backend) state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : "wasm";
-      const backendTag = message.backend === "webgpu" ? "WebGPU" : message.backend === "wasm" ? "WASM" : state.neuralBackend === "webgpu" ? "WebGPU" : "WASM";
-      // Always keep voice button label up to date even when not showing overlay.
-      updateEngineUI();
-      if (!state.neuralShowLoading) return;
-      if (message.cached || message.status === "cached") {
-        const pct = Number.isFinite(message.progress) ? Math.round(message.progress) : null;
-        const label = message.file?.includes("voices") ? "voices.npz" : message.file?.includes("onnx") ? "model.onnx" : message.file || "voice model";
-        setNeuralLoading(pct ?? 100, `Loading ${label} [cached · ${backendTag}]${pct !== null ? ` · ${pct}%` : ""}`);
-        return;
-      }
-      if (message.status === "download" && message.file?.includes("onnx") && Number.isFinite(message.progress)) {
-        setNeuralLoading(message.progress, `Downloading model.onnx [${backendTag}] · ${Math.round(message.progress)}%`);
-      } else if (message.status === "download" && message.file?.includes("voices") && Number.isFinite(message.progress)) {
-        setNeuralLoading(message.progress, `Downloading voices.npz [${backendTag}] · ${Math.round(message.progress)}%`);
-      } else if (message.status === "downloading" && message.file?.includes("voices")) {
-        setNeuralLoading(message.progress ?? 0, `Downloading voices.npz [${backendTag}] · ${message.progress ? Math.round(message.progress) + "%" : "…"}`);
-      } else if (message.status === "downloading") {
-        setNeuralLoading(message.progress ?? 0, `Downloading ${message.file || "voice model"} [${backendTag}] · ${message.progress ? Math.round(message.progress) + "%" : "…"}`);
-      } else if (message.status === "unzipping") {
-        setNeuralLoading(null, `Unzipping voices (cached ${message.file || "voices"}…) [${backendTag}]`);
-      } else if (message.status === "parsing") {
-        setNeuralLoading(message.progress ?? null, `Preparing voice profiles · ${message.progress ? Math.round(message.progress) + "%" : ""} [${backendTag}]`);
-      } else if (message.status === "fallback") {
-        setNeuralLoading(null, message.message || "WebGPU failed – using WASM");
-        state.neuralBackendActual = "wasm";
-        updateEngineUI();
-      } else if (message.status === "initiate" || message.status === "starting") {
-        setNeuralLoading(null, "Preparing voice files");
-      } else if (Number.isFinite(message.progress)) {
-        const label = message.file?.includes("voices") ? "voices.npz" : message.file?.includes("onnx") ? "model.onnx" : message.file || "voice files";
-        setNeuralLoading(message.progress, `Loading ${label} [${backendTag}] · ${Math.round(message.progress)}%`);
-      }
-      return;
-    }
-
-    if (message.type === "ready") {
-      clearNeuralInitTimer();
-      state.neuralReady = true;
-      localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
-      const resolveInitialization = state.neuralInitResolve;
-      state.neuralInitPromise = null;
-      state.neuralInitResolve = null;
-      state.neuralInitReject = null;
-      state.neuralShowLoading = false;
-      updateEngineUI();
-      resolveInitialization?.();
-      hideLoading();
-      return;
-    }
-
-    if (message.type === "backend") {
-      state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : "wasm";
-      updateEngineUI();
-      return;
-    }
-
-    if (message.type === "generating") {
-      if (message.backend) state.neuralBackendActual = message.backend === "webgpu" ? "webgpu" : "wasm";
-      const tag = message.backend === "webgpu" ? "WebGPU" : message.backend === "wasm" ? "WASM" : state.neuralBackendActual === "webgpu" ? "WebGPU" : "WASM";
-      const stage = message.stage;
-      if (state.playback === "buffering") {
-        if (stage === "phonemize") elements.nowSection.textContent = `Phonemizing text [${tag}]…`;
-        else if (stage === "synthesize") elements.nowSection.textContent = `Synthesizing ${message.length ? Math.round(message.length) + " chars" : ""} [${tag}]…`;
-        else if (stage === "encoding") elements.nowSection.textContent = `Encoding audio [${tag}]…`;
-        else elements.nowSection.textContent = `Generating on this device [${tag}]`;
-      }
-      // Also reflect in the loading overlay when visible.
-      if (state.neuralShowLoading) {
-        if (stage === "phonemize") setNeuralLoading(null, `Phonemizing passage [${tag}]`);
-        else if (stage === "synthesize") setNeuralLoading(null, `Synthesizing speech [${tag}]`);
-        else if (stage === "encoding") setNeuralLoading(null, `Encoding audio [${tag}]`);
-      }
-      return;
-    }
-
-    if (message.type === "audio") {
-      const request = state.neuralRequests.get(message.id);
-      if (!request) return;
-      state.neuralRequests.delete(message.id);
-      window.clearTimeout(request.timer);
-      const url = URL.createObjectURL(new Blob([message.buffer], { type: "audio/wav" }));
-      const entry = { url, duration: message.duration };
-      if (request.cacheKey) state.neuralCache.set(request.cacheKey, entry);
-      request.resolve(entry);
-      trimNeuralCache();
-      return;
-    }
-
-    if (message.type === "generation-error") {
-      const request = state.neuralRequests.get(message.id);
-      if (!request) return;
-      state.neuralRequests.delete(message.id);
-      window.clearTimeout(request.timer);
-      request.reject(new Error(message.message));
-      return;
-    }
-
-    if (message.type === "fatal") {
-      const error = new Error(message.message);
-      error.recoverable = true;
-      resetNeuralWorker(error);
-    }
-  });
-
-  worker.addEventListener("error", (event) => {
-    if (worker !== state.neuralWorker) return;
-    const error = new Error(event.message || "The natural voice stopped unexpectedly.");
-    error.recoverable = true;
-    resetNeuralWorker(error);
-  });
-
-  if (state.neuralShowLoading) {
-    const tag = state.neuralBackend === "webgpu" ? "WebGPU" : "WASM";
-    setNeuralLoading(null, `Starting the ${tag} voice engine`);
-  }
-  armNeuralInitTimer(worker);
-  // Guard: if Android + WebGPU requested, warn but still let worker fallback.
-  if (IS_ANDROID && state.neuralBackend === "webgpu") {
-    console.warn("WebGPU on Android is experimental and has crashed the stress harness; will fallback to WASM if needed.");
-  }
-  worker.postMessage({ type: "init", backend: state.neuralBackend });
-  return state.neuralInitPromise;
-}
-
-function legacyTrimNeuralCache() {
-  if (state.neuralCache.size <= 8) return;
-  for (const [key, entry] of state.neuralCache) {
-    const segmentNumber = Number(key.split(":").at(-1));
-    if (entry.url === state.currentAudioUrl || Math.abs(segmentNumber - state.currentSegmentIndex) <= 2) continue;
-    URL.revokeObjectURL(entry.url);
-    state.neuralCache.delete(key);
-    if (state.neuralCache.size <= 8) break;
-  }
-}
-
-async function legacyGenerateNeuralText(text, cacheKey = "") {
-  if (cacheKey && state.neuralCache.has(cacheKey)) return state.neuralCache.get(cacheKey);
-  const existing = [...state.neuralRequests.values()].find((request) => request.cacheKey === cacheKey && cacheKey);
-  if (existing) return existing.promise;
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await ensureNeuralWorker();
-      const id = ++state.neuralRequestId;
-      let resolveRequest;
-      let rejectRequest;
-      const promise = new Promise((resolve, reject) => {
-        resolveRequest = resolve;
-        rejectRequest = reject;
-      });
-      const timer = window.setTimeout(() => {
-        if (!state.neuralRequests.has(id)) return;
-        const error = new Error("The natural voice took too long to generate this passage.");
-        error.name = "TimeoutError";
-        error.recoverable = true;
-        resetNeuralWorker(error);
-      }, NEURAL_GENERATION_TIMEOUT_MS);
-      state.neuralRequests.set(id, {
-        cacheKey,
-        promise,
-        resolve: resolveRequest,
-        reject: rejectRequest,
-        timer,
-      });
-      state.neuralWorker.postMessage({ type: "generate", id, text, voice: state.neuralVoice });
-      return await promise;
-    } catch (error) {
-      if (!error.recoverable || attempt > 0) throw error;
-      setNeuralLoading(null, "Restarting the private voice engine");
-    }
-  }
-  throw new Error("The natural voice could not start.");
-}
-
-function legacyGetNeuralSegment(segmentIndex) {
-  const segment = state.neuralSegments[segmentIndex];
-  if (!segment) return Promise.reject(new Error("That part of the work is unavailable."));
-  const cacheKey = `${state.neuralVoice}:${segmentIndex}`;
-  return generateNeuralText(segment.text, cacheKey);
+  setLoadingIsolation(false);
 }
 
 function ttsCallbacks() {
@@ -1918,7 +1807,6 @@ function ttsCallbacks() {
       state.neuralReady = true;
       localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
       state.activeBackendId = message.backend || state.activeBackendId;
-      state.activeBackendModel = message.model || state.activeBackendModel;
       // dtype/device from ready already includes chosen quant
       console.info("[Hear TTS] runtime", {
         crossOriginIsolated: message.crossOriginIsolated,
@@ -1946,9 +1834,6 @@ function ttsCallbacks() {
       const action = stage === "phonemize" ? "Reading punctuation" : stage === "encoding" ? "Finishing audio" : "Synthesizing";
       if (state.playback === "buffering") {
         setPlayerStatus(`${action} ${segLabel} · ${backendLabel}`);
-      }
-      if (state.neuralShowLoading) {
-        setNeuralLoading(null, `${action} ${segLabel} [${backendLabel}]`);
       }
     },
     onMetric(metric) {
@@ -2011,45 +1896,7 @@ async function probeKokoroWebGpu() {
   }
 }
 
-async function benchmarkBackend(candidate) {
-  candidate.setEpoch(state.generationEpoch);
-  const rtf = await candidate.benchmark();
-  console.info("[Hear TTS] benchmark", JSON.stringify({ backend: candidate.id, rtf }));
-  return { candidate, rtf };
-}
-
-async function chooseAutomaticBackend() {
-  const webGpu = await probeKokoroWebGpu();
-  if (webGpu.ok && webGpu.rtf < 0.8) {
-    if (webGpu.backend) return webGpu.backend;
-    const candidate = new KokoroWebGPU(ttsCallbacks());
-    await candidate.load();
-    return candidate;
-  }
-
-  try {
-    const result = await benchmarkBackend(new KittenWasm(ttsCallbacks()));
-    if (result.rtf < 0.8) return result.candidate;
-    await result.candidate.dispose();
-  } catch (error) {
-    console.warn("[Hear TTS] Kitten benchmark failed", error);
-  }
-
-  try {
-    const result = await benchmarkBackend(new KokoroWasm(ttsCallbacks()));
-    if (result.rtf < 1) return result.candidate;
-    await result.candidate.dispose();
-  } catch (error) {
-    console.warn("[Hear TTS] Kokoro WASM benchmark failed", error);
-  }
-  return null;
-}
-
 async function createSelectedBackend() {
-  if (state.backendPreference === "auto") {
-    console.warn("[Hear TTS] auto backend is disabled – use an explicit engine choice");
-    return null;
-  }
   if (state.backendPreference === "kitten") {
     return new KittenWasm(ttsCallbacks(), { model: state.kittenModel, dtype: state.kittenDtype });
   }
@@ -2115,8 +1962,6 @@ async function ensureNeuralWorker({ background = false } = {}) {
   }
   state.ttsBackend = backend;
   state.activeBackendId = backend.id;
-  state.activeBackendModel = backend.config?.model || backend.model || "";
-  state.activeBackendDevice = backend.config?.device || backend.device || (backend.id.includes("webgpu") ? "webgpu" : "wasm");
   backend.setEpoch(state.generationEpoch);
   await backend.load();
   state.neuralReady = true;
@@ -2281,14 +2126,25 @@ function releaseUnlockAudio() {
   if (elements.mediaAudio.dataset.mode === "unlock") elements.mediaAudio.dataset.mode = "";
 }
 
+function neuralConsentKey() {
+  const details = getModelDownloadDetails({
+    backend: state.backendPreference,
+    kokoroDevice: state.kokoroDevice,
+    kokoroDtype: state.kokoroDtype,
+    kittenModel: state.kittenModel,
+  });
+  return `${STORAGE_PREFIX}model-consent:${state.backendPreference}:${details.model}:${details.label}`;
+}
+
 function requestNeuralAction(action) {
   state.pendingNeuralAction = action;
-  if (state.neuralReady || localStorage.getItem(`${STORAGE_PREFIX}neural-ready`) === "true") {
+  if (state.neuralReady || localStorage.getItem(neuralConsentKey()) === "true") {
     unlockMediaAudio();
     state.pendingNeuralAction = null;
     action();
     return;
   }
+  updateNeuralDownloadSheet();
   elements.neuralSheet.showModal();
 }
 
@@ -2440,7 +2296,17 @@ function stopNeural(resetSource = false) {
   state.mediaSwitching = false;
 }
 
-function setPlayerStatus(detail = "") {
+function announcePlayerStatus(message, { force = false } = {}) {
+  if (!elements.playerAnnouncement || !message || (!force && message === state.lastAnnouncement)) return;
+  const now = Date.now();
+  if (!force && now - state.lastAnnouncementAt < 5000) return;
+  state.lastAnnouncement = message;
+  state.lastAnnouncementAt = now;
+  elements.playerAnnouncement.textContent = "";
+  requestAnimationFrame(() => { elements.playerAnnouncement.textContent = message; });
+}
+
+function setPlayerStatus(detail = "", { announce = true } = {}) {
   const section = state.chunks[state.currentIndex]?.section || "Opening";
   const defaultLabel = state.playback === "playing"
     ? `Listening · ${section}`
@@ -2453,14 +2319,18 @@ function setPlayerStatus(detail = "") {
           : state.playback === "error"
             ? "Playback needs attention"
             : `Ready · ${section}`;
-  elements.nowSection.textContent = detail || defaultLabel;
+  const message = detail || defaultLabel;
+  elements.nowSection.textContent = message;
+  if (announce) announcePlayerStatus(message);
 }
 
 function setPlaybackState(nextState, detail = "") {
+  const previousState = state.playback;
   state.playback = nextState;
   elements.player.dataset.state = nextState;
   elements.player.setAttribute("aria-busy", String(nextState === "buffering"));
-  setPlayerStatus(detail);
+  setPlayerStatus(detail, { announce: previousState === nextState });
+  if (previousState !== nextState) announcePlayerStatus(elements.nowSection.textContent, { force: true });
   const playing = nextState === "playing";
   elements.playButton.setAttribute("aria-label", playing ? "Pause" : nextState === "buffering" ? "Cancel voice preparation" : "Play");
   const heroLabel = $("span:last-child", elements.heroPlay);
@@ -2847,7 +2717,7 @@ function setRate(nextRate, restartSpeech = true) {
   }
 }
 
-function activateWork(work) {
+function activateWork(work, { historyMode = "push" } = {}) {
   stopSpeech("idle");
   resetNeuralWorker(new Error("A different work was opened."));
   clearNeuralCache();
@@ -2870,31 +2740,20 @@ function activateWork(work) {
   updateMediaMetadata();
   updateProgress();
   rememberWork(work);
-
-  // No auto warm/download on work open – user must explicitly pick a neural
-  // engine and press Download & listen / Preview. Previously this warmed
-  // `auto` and re-fetched on every refresh (issue #4/#5).
-  void state;
+  announcePlayerStatus(`${work.title} is ready to listen.`, { force: true });
 
   elements.player.hidden = false;
   document.body.classList.add("player-visible");
   elements.headerQuery.value = "";
   showReaderView();
 
-  let url = location.pathname;
-  if (work.source === "wikipedia") {
-    url += `?${new URLSearchParams({ lang: work.lang, title: work.title })}`;
-  } else if (work.source === "standard") {
-    url += `?${new URLSearchParams({ source: "standard", book: work.key.replace(/^standard:/, "") })}`;
-  } else if (work.source === "gutenberg") {
-    url += `?${new URLSearchParams({ source: "gutenberg", book: work.key.replace(/^gutenberg:/, "") })}`;
-  }
-  history.replaceState({ work: work.key }, "", url);
+  const method = historyMode === "replace" ? "replaceState" : historyMode === "push" ? "pushState" : null;
+  if (method) history[method](routeStateForWork(work), "", routeForWork(work, location.pathname));
 
   if (state.currentIndex > 0) showToast(`Ready to resume ${work.title}`);
 }
 
-async function loadArticle(rawInput) {
+async function loadArticle(rawInput, { historyMode = "push" } = {}) {
   let parsed;
   try {
     parsed = parseArticleInput(rawInput);
@@ -2905,19 +2764,18 @@ async function loadArticle(rawInput) {
 
   stopSpeech("idle");
   clearNeuralCache();
-  elements.loadingTitle.textContent = "Editing for your ears…";
-  elements.loadingView.hidden = false;
-  elements.loadingProgress.hidden = true;
-  elements.loadingDetail.textContent = "Removing citations and references";
+  const { controller, requestId } = beginContentTask("Editing for your ears…", "Removing citations and references");
 
   try {
-    const article = await fetchArticle(parsed.title, parsed.lang);
+    const article = await fetchArticle(parsed.title, parsed.lang, true, { signal: controller.signal });
+    if (controller.signal.aborted || requestId !== state.contentRequestId) return;
     await cacheWork(article).catch(() => {});
-    activateWork(article);
+    activateWork(article, { historyMode });
   } catch (error) {
+    if (isAbortError(error)) return;
     showToast(error.message || "I couldn’t prepare that article.");
   } finally {
-    hideLoading();
+    finishContentTask(controller, requestId);
   }
 }
 
@@ -2939,8 +2797,9 @@ function setBookmarklet() {
 
 function updateMediaMetadata() {
   if (!("mediaSession" in navigator) || !("MediaMetadata" in window) || !state.article) return;
-  const artwork = state.article.image
-    ? [{ src: state.article.image }]
+  const artworkSource = state.artworkObjectUrl || (canDisplayImage(state.article) ? state.article.image : "");
+  const artwork = artworkSource
+    ? [{ src: artworkSource }]
     : [];
   navigator.mediaSession.metadata = new MediaMetadata({
     title: state.article.title,
@@ -3048,14 +2907,13 @@ async function previewNaturalVoice() {
 
 elements.brandLink.addEventListener("click", (event) => {
   event.preventDefault();
-  showLibraryView();
-  history.replaceState({}, "", location.pathname);
+  navigateToLibrary();
 });
-elements.libraryButton.addEventListener("click", () => {
-  showLibraryView();
-  history.replaceState({}, "", location.pathname);
+elements.libraryButton.addEventListener("click", () => navigateToLibrary());
+elements.nowPlayingButton.addEventListener("click", () => {
+  showReaderView();
+  if (state.article) history.pushState(routeStateForWork(state.article), "", routeForWork(state.article, location.pathname));
 });
-elements.nowPlayingButton.addEventListener("click", () => showReaderView());
 elements.importButton.addEventListener("click", () => elements.epubInput.click());
 elements.importInlineButton.addEventListener("click", () => elements.epubInput.click());
 elements.epubInput.addEventListener("change", () => importEpub(elements.epubInput.files?.[0]));
@@ -3138,7 +2996,6 @@ elements.seekRange.addEventListener("change", () => {
 });
 
 elements.voiceButton.addEventListener("click", () => elements.voiceSheet.showModal());
-elements.autoEngine.addEventListener("click", () => selectEngine("auto"));
 elements.kokoroEngine.addEventListener("click", () => selectEngine("kokoro"));
 elements.kittenEngine.addEventListener("click", () => selectEngine("kitten"));
 elements.systemEngine.addEventListener("click", () => selectEngine("system"));
@@ -3171,10 +3028,6 @@ if (elements.kokoroDeviceSelect) {
     updateEngineUI();
     showToast(next === "webgpu" ? "Kokoro WebGPU selected – will be probed only after you press Play" : "Kokoro WASM selected");
   });
-}
-if (elements.neuralBackendSelect) {
-  // Legacy row kept hidden – no-op
-  elements.neuralBackendSelect.addEventListener("change", () => {});
 }
 if (elements.kokoroDtypeSelect) {
   elements.kokoroDtypeSelect.addEventListener("change", () => {
@@ -3232,11 +3085,11 @@ if (elements.clearAudioCache) elements.clearAudioCache.addEventListener("click",
 if (elements.clearAllData) elements.clearAllData.addEventListener("click", handleClearAllData);
 if (elements.refreshModelCache) elements.refreshModelCache.addEventListener("click", refreshModelCacheUI);
 if (elements.clearModelCache) elements.clearModelCache.addEventListener("click", handleClearModelCache);
-// Refresh storage label when sheet opens (cache count may have changed)
-if (elements.voiceSheet) {
-  elements.voiceSheet.addEventListener("toggle", () => refreshStorageLabel());
-  elements.voiceButton.addEventListener("click", () => setTimeout(refreshStorageLabel, 50));
-}
+elements.advancedSettingsButton.addEventListener("click", () => {
+  elements.voiceSheet.close();
+  elements.advancedSheet.showModal();
+  refreshStorageLabel();
+});
 elements.voiceSelect.addEventListener("change", () => {
   state.selectedVoice = state.voices.find((voice) => voice.voiceURI === elements.voiceSelect.value) || state.selectedVoice;
   localStorage.setItem(`${STORAGE_PREFIX}voice`, state.selectedVoice?.voiceURI || "");
@@ -3275,6 +3128,7 @@ elements.followToggle.addEventListener("change", () => {
 elements.downloadNeural.addEventListener("click", () => {
   const action = state.pendingNeuralAction;
   state.pendingNeuralAction = null;
+  localStorage.setItem(neuralConsentKey(), "true");
   unlockMediaAudio();
   elements.neuralSheet.close();
   action?.();
@@ -3348,6 +3202,14 @@ elements.mediaAudio.addEventListener("error", () => {
 });
 
 elements.loadingCancel.addEventListener("click", async () => {
+  if (elements.loadingView.dataset.kind === "content") {
+    state.contentAbortController?.abort();
+    state.contentAbortController = null;
+    state.contentRequestId += 1;
+    hideLoading();
+    showToast("Opening cancelled");
+    return;
+  }
   if (state.playback !== "buffering") return;
   stopNeural(false);
   await resetNeuralWorker(new Error("Voice preparation cancelled.")).catch(() => {});
@@ -3399,7 +3261,7 @@ elements.shareButton.addEventListener("click", async () => {
 document.addEventListener("keydown", (event) => {
   const isTyping = /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.target.isContentEditable;
   if (
-    isTyping || !state.article || elements.voiceSheet.open || elements.setupSheet.open ||
+    isTyping || !state.article || elements.voiceSheet.open || elements.advancedSheet.open || elements.setupSheet.open ||
     elements.neuralSheet.open || elements.chaptersSheet.open
   ) return;
   if (event.code === "Space") {
@@ -3439,33 +3301,72 @@ elements.libraryButton.hidden = true;
 updateContinueListening();
 loadCatalog();
 
-const initialParams = new URLSearchParams(location.search);
-const initialInput = initialParams.get("url") || (
-  initialParams.get("title")
-    ? `${safeLanguage(initialParams.get("lang") || "en")}:${initialParams.get("title")}`
-    : ""
-);
-const initialSource = initialParams.get("source");
-const initialBook = initialParams.get("book");
-if (initialInput) {
-  loadArticle(initialInput);
-} else if (initialSource === "standard" && initialBook) {
-  getCachedWork(`standard:${initialBook}`).then((cached) => {
-    if (cached) activateWork(cached);
-    else fetchStandardItemFromSlug(initialBook).then(loadCatalogItem).catch((error) => showToast(error.message));
-  });
-} else if (initialSource === "gutenberg" && /^\d+$/.test(initialBook || "")) {
-  const item = {
-    id: `gutenberg:${initialBook}`,
-    gutenbergId: initialBook,
-    source: "gutenberg",
-    sourceLabel: "Project Gutenberg",
-    title: `Project Gutenberg #${initialBook}`,
-    author: "Project Gutenberg",
-    description: "A public-domain edition from Project Gutenberg.",
-    sourceUrl: `https://www.gutenberg.org/ebooks/${initialBook}`,
-  };
-  getCachedWork(item.id).then((cached) => cached ? activateWork(cached) : loadCatalogItem(item));
-} else {
-  showLibraryView({ scrollTop: false });
+async function resolveCurrentRoute({ historyMode = "none", routeState = history.state } = {}) {
+  if (routeState?.view === "library") {
+    navigateToLibrary({ historyMode, scrollTop: false });
+    return;
+  }
+
+  if (routeState?.work) {
+    if (state.article?.key === routeState.work) {
+      showReaderView({ scrollTop: false });
+      return;
+    }
+    const cached = await getCachedWork(routeState.work).catch(() => null);
+    if (cached) {
+      activateWork(cached, { historyMode });
+      return;
+    }
+  }
+
+  const params = new URLSearchParams(location.search);
+  const input = params.get("url") || (
+    params.get("title")
+      ? `${safeLanguage(params.get("lang") || "en")}:${params.get("title")}`
+      : ""
+  );
+  const source = params.get("source");
+  const book = params.get("book");
+  if (input) {
+    await loadArticle(input, { historyMode });
+    return;
+  }
+  if (source === "standard" && book) {
+    const cached = await getCachedWork(`standard:${book}`).catch(() => null);
+    if (cached) activateWork(cached, { historyMode });
+    else await loadCatalogItem({
+      id: `standard:${book}`,
+      source: "standard",
+      sourceLabel: "Standard Ebooks",
+      title: book.replaceAll("-", " "),
+      author: "Standard Ebooks",
+      description: "A carefully produced public-domain edition.",
+      sourceUrl: `https://standardebooks.org/ebooks/${book}`,
+    }, { historyMode });
+    return;
+  }
+  if (source === "gutenberg" && /^\d+$/.test(book || "")) {
+    const item = {
+      id: `gutenberg:${book}`,
+      gutenbergId: book,
+      source: "gutenberg",
+      sourceLabel: "Project Gutenberg",
+      title: `Project Gutenberg #${book}`,
+      author: "Project Gutenberg",
+      description: "A public-domain edition from Project Gutenberg.",
+      sourceUrl: `https://www.gutenberg.org/ebooks/${book}`,
+    };
+    const cached = await getCachedWork(item.id).catch(() => null);
+    if (cached) activateWork(cached, { historyMode });
+    else await loadCatalogItem(item, { historyMode });
+    return;
+  }
+  navigateToLibrary({ historyMode, scrollTop: false });
 }
+
+window.addEventListener("popstate", (event) => {
+  resolveCurrentRoute({ historyMode: "none", routeState: event.state });
+});
+
+resolveCurrentRoute({ historyMode: "replace" });
+registerHearServiceWorker(() => showToast("A Hear update is ready for your next visit."));

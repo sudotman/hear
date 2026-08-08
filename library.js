@@ -1,4 +1,4 @@
-import { unzipSync } from "fflate";
+import { fetchWithTimeout } from "./fetch-utils.js";
 
 const STANDARD_ORIGIN = "https://standardebooks.org";
 const GUTENBERG_ORIGIN = "https://www.gutenberg.org";
@@ -143,12 +143,12 @@ function parseGutenbergSearchEntries(text) {
   });
 }
 
-export async function fetchStandardCatalog({ query = "", page = 1, limit = 18 } = {}) {
+export async function fetchStandardCatalog({ query = "", page = 1, limit = 18, signal } = {}) {
   const url = new URL("/ebooks", STANDARD_ORIGIN);
   if (query.trim()) url.searchParams.set("query", query.trim());
   url.searchParams.set("per-page", String(limit));
   url.searchParams.set("page", String(page));
-  const response = await fetch(url, { headers: { Accept: "application/xhtml+xml" } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: "application/xhtml+xml" }, signal });
   if (!response.ok) throw new Error("Standard Ebooks did not respond.");
   const document = new DOMParser().parseFromString(await response.text(), "text/html");
   return [...document.querySelectorAll('.ebooks-list [typeof="schema:Book"]')].map((book) => {
@@ -171,21 +171,21 @@ export async function fetchStandardCatalog({ query = "", page = 1, limit = 18 } 
   }).filter((item) => item.sourceUrl);
 }
 
-export async function fetchGutenbergCatalog({ query = "", page = 1 } = {}) {
+export async function fetchGutenbergCatalog({ query = "", page = 1, signal } = {}) {
   const url = new URL("/ebooks/search.opds/", GUTENBERG_ORIGIN);
   if (query.trim()) url.searchParams.set("query", query.trim());
   else url.searchParams.set("sort_order", "downloads");
   if (page > 1) url.searchParams.set("start_index", String((page - 1) * 25 + 1));
-  const response = await fetch(url, { headers: { Accept: "application/atom+xml" } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: "application/atom+xml" }, signal });
   if (!response.ok) throw new Error("Project Gutenberg did not respond.");
   return parseGutenbergSearchEntries(await response.text());
 }
 
-export async function fetchStandardItemFromSlug(slug) {
+export async function fetchStandardItemFromSlug(slug, { signal } = {}) {
   const safeSlug = String(slug || "").replace(/^\/+|\/+$/g, "");
   if (!safeSlug || safeSlug.includes("..")) throw new Error("That Standard Ebooks link is invalid.");
   const sourceUrl = `${STANDARD_ORIGIN}/ebooks/${safeSlug}`;
-  const response = await fetch(sourceUrl, { headers: { Accept: "application/xhtml+xml" } });
+  const response = await fetchWithTimeout(sourceUrl, { headers: { Accept: "application/xhtml+xml" }, signal });
   if (!response.ok) throw new Error("That Standard Ebooks edition could not be found.");
   const document = new DOMParser().parseFromString(await response.text(), "text/html");
   const title = document.querySelector('[property="schema:name"]')?.textContent?.trim()
@@ -333,14 +333,7 @@ function extractEpubChapter(files, item, title, chapterNumber, titles) {
   return sections;
 }
 
-export async function parseEpub(arrayBuffer, options = {}) {
-  let files;
-  try {
-    files = unzipSync(new Uint8Array(arrayBuffer));
-  } catch {
-    throw new Error("That file is not a readable EPUB.");
-  }
-
+export function parseEpubFiles(files, options = {}) {
   const containerText = readZipText(files, "META-INF/container.xml");
   if (!containerText) throw new Error("This EPUB is missing its package information.");
   const container = xmlDocument(containerText);
@@ -435,9 +428,10 @@ function humanAuthorName(value) {
   return match ? `${match[2]} ${match[1]}` : text;
 }
 
-async function fetchGutenbergDetails(id) {
-  const response = await fetch(`${GUTENBERG_ORIGIN}/ebooks/${id}.opds`, {
+async function fetchGutenbergDetails(id, { signal } = {}) {
+  const response = await fetchWithTimeout(`${GUTENBERG_ORIGIN}/ebooks/${id}.opds`, {
     headers: { Accept: "application/atom+xml" },
+    signal,
   });
   if (!response.ok) throw new Error("Project Gutenberg could not open that edition.");
   const document = xmlDocument(await response.text());
@@ -563,19 +557,19 @@ function extractGutenbergText(text) {
   return blocks;
 }
 
-async function fetchGitenbergContent(id) {
+async function fetchGitenbergContent(id, { signal } = {}) {
   const searchUrl = new URL("https://api.github.com/search/repositories");
   searchUrl.searchParams.set("q", `${id} in:name org:GITenberg`);
   searchUrl.searchParams.set("per_page", "20");
-  const searchResponse = await fetch(searchUrl, { headers: { Accept: "application/vnd.github+json" } });
+  const searchResponse = await fetchWithTimeout(searchUrl, { headers: { Accept: "application/vnd.github+json" }, signal });
   if (!searchResponse.ok) throw new Error("The Gutenberg text mirror is temporarily unavailable.");
   const search = await searchResponse.json();
   const repository = search.items?.find((item) => item.name.endsWith(`_${id}`));
   if (!repository) throw new Error("A browser-readable mirror of this book is not available yet.");
 
-  const treeResponse = await fetch(
+  const treeResponse = await fetchWithTimeout(
     `https://api.github.com/repos/${repository.full_name}/git/trees/${repository.default_branch}?recursive=1`,
-    { headers: { Accept: "application/vnd.github+json" } },
+    { headers: { Accept: "application/vnd.github+json" }, signal },
   );
   if (!treeResponse.ok) throw new Error("The Gutenberg text mirror could not be opened.");
   const tree = await treeResponse.json();
@@ -589,18 +583,18 @@ async function fetchGitenbergContent(id) {
   const contentPath = htmlPath || textPath;
   if (!contentPath) throw new Error("This Gutenberg mirror does not include readable text.");
   const rawUrl = `https://raw.githubusercontent.com/${repository.full_name}/${repository.default_branch}/${contentPath}`;
-  const response = await fetch(rawUrl);
+  const response = await fetchWithTimeout(rawUrl, { signal }, 90_000);
   if (!response.ok) throw new Error("The mirrored Gutenberg text could not be downloaded.");
   const content = await response.text();
   return htmlPath ? extractGutenbergHtml(content) : extractGutenbergText(content);
 }
 
-export async function loadGutenbergWork(item, onStatus = () => {}) {
+export async function loadGutenbergWork(item, onStatus = () => {}, { signal } = {}) {
   const id = item.gutenbergId || String(item.id).replace(/^gutenberg:/, "");
   onStatus("Reading Project Gutenberg metadata");
-  const details = await fetchGutenbergDetails(id);
+  const details = await fetchGutenbergDetails(id, { signal });
   onStatus("Opening the public-domain text mirror");
-  const blocks = await fetchGitenbergContent(id);
+  const blocks = await fetchGitenbergContent(id, { signal });
   const proseCount = blocks.filter((block) => block.type === "p" || block.type === "li").length;
   if (proseCount < 3) throw new Error("This Gutenberg edition does not contain enough readable text.");
   return {
@@ -619,13 +613,14 @@ export async function loadGutenbergWork(item, onStatus = () => {}) {
   };
 }
 
-export async function loadStandardWork(item, onStatus = () => {}) {
+export async function loadStandardWork(item, onStatus = () => {}, { signal, parse } = {}) {
   if (!item.downloadUrl) throw new Error("This Standard Ebooks edition has no compatible EPUB.");
+  if (typeof parse !== "function") throw new Error("The EPUB parser is unavailable.");
   onStatus("Downloading the Standard Ebooks edition");
-  const response = await fetch(item.downloadUrl, { headers: { Accept: "application/epub+zip" } });
+  const response = await fetchWithTimeout(item.downloadUrl, { headers: { Accept: "application/epub+zip" }, signal }, 90_000);
   if (!response.ok) throw new Error("The Standard Ebooks EPUB could not be downloaded.");
   onStatus("Finding chapters and reading order");
-  return parseEpub(await response.arrayBuffer(), {
+  return parse(await response.arrayBuffer(), {
     key: item.id,
     title: item.title,
     author: item.author,
@@ -636,7 +631,7 @@ export async function loadStandardWork(item, onStatus = () => {}) {
     sourceLabel: "Standard Ebooks",
     sourceUrl: item.sourceUrl,
     catalogItem: item,
-  });
+  }, { signal, onStatus });
 }
 
 function openCache() {

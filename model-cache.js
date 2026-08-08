@@ -74,18 +74,14 @@ export async function getModelCacheEntries() {
         if (resp) {
           const len = resp.headers.get("content-length");
           if (len) size = Number(len);
-          else {
-            // Fallback: read blob size (costy but accurate for opaque cached items)
-            try {
-              const blob = await resp.clone().blob();
-              size = blob.size;
-            } catch {}
-          }
+          // Do not materialize large cached model bodies merely to calculate
+          // their size. Hear's own Kitten cache writes content-length; other
+          // opaque entries remain marked as unknown instead of using RAM.
         }
       } catch {}
       totalBytes += size;
       byCache[cacheName].bytes += size;
-      const entry = { cacheName, url, shortUrl: shortUrl(url), label, size, formattedSize: formatBytes(size) };
+      const entry = { cacheName, url, shortUrl: shortUrl(url), label, size, sizeKnown: size > 0, formattedSize: formatBytes(size) };
       entries.push(entry);
       byCache[cacheName].entries.push(entry);
     }
@@ -98,7 +94,8 @@ export async function getModelCacheEntries() {
     if (oa !== ob) return oa - ob;
     return b.size - a.size;
   });
-  return { available: true, entries, totalBytes, totalFormatted: formatBytes(totalBytes), byCache };
+  const unknownCount = entries.filter((entry) => !entry.sizeKnown).length;
+  return { available: true, entries, totalBytes, totalFormatted: `${formatBytes(totalBytes)}${unknownCount ? " + unknown" : ""}`, unknownCount, byCache };
 }
 
 export async function deleteCacheEntry(cacheName, url) {
