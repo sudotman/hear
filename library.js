@@ -5,6 +5,8 @@ const GUTENBERG_ORIGIN = "https://www.gutenberg.org";
 const GUTENDEX_ORIGIN = "https://gutendex.com";
 const WORK_CACHE = "hear-work-cache";
 const WORK_STORE = "works";
+const COVER_STORE = "covers";
+const DATABASE_VERSION = 2;
 const CACHE_VERSION = 6;
 const decoder = new TextDecoder();
 
@@ -620,10 +622,32 @@ export async function loadStandardWork(item, onStatus = () => {}, { signal, pars
 
 function openCache() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(WORK_CACHE, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(WORK_STORE)) {
-        request.result.createObjectStore(WORK_STORE, { keyPath: "key" });
+    const request = indexedDB.open(WORK_CACHE, DATABASE_VERSION);
+    request.onupgradeneeded = (event) => {
+      const database = request.result;
+      const workStore = database.objectStoreNames.contains(WORK_STORE)
+        ? request.transaction.objectStore(WORK_STORE)
+        : database.createObjectStore(WORK_STORE, { keyPath: "key" });
+      const coverStore = database.objectStoreNames.contains(COVER_STORE)
+        ? request.transaction.objectStore(COVER_STORE)
+        : database.createObjectStore(COVER_STORE, { keyPath: "key" });
+
+      // Older cache records kept embedded EPUB covers inside the full work.
+      // Move those data URLs into a small, cover-only store so the library can
+      // retrieve artwork without cloning every chapter from IndexedDB.
+      if (event.oldVersion < DATABASE_VERSION) {
+        const cursorRequest = workStore.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          const record = cursor.value;
+          const image = record?.work?.image;
+          if (image?.startsWith("data:")) {
+            coverStore.put({ key: record.key, image, updatedAt: record.updatedAt || Date.now() });
+            cursor.update({ ...record, work: { ...record.work, image: "" } });
+          }
+          cursor.continue();
+        };
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -635,11 +659,31 @@ export async function getCachedWork(key) {
   if (!("indexedDB" in window) || !key) return null;
   const database = await openCache();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(WORK_STORE, "readonly");
-    const request = transaction.objectStore(WORK_STORE).get(key);
-    request.onsuccess = () => resolve(request.result?.version === CACHE_VERSION ? request.result.work : null);
-    request.onerror = () => reject(request.error);
-    transaction.oncomplete = () => database.close();
+    const transaction = database.transaction([WORK_STORE, COVER_STORE], "readonly");
+    const workRequest = transaction.objectStore(WORK_STORE).get(key);
+    const coverRequest = transaction.objectStore(COVER_STORE).get(key);
+    transaction.oncomplete = () => {
+      database.close();
+      const record = workRequest.result;
+      if (record?.version !== CACHE_VERSION) {
+        resolve(null);
+        return;
+      }
+      const image = coverRequest.result?.image;
+      resolve(image && !record.work.image ? { ...record.work, image } : record.work);
+    };
+    transaction.onerror = () => { database.close(); reject(transaction.error); };
+  });
+}
+
+export async function getCachedCover(key) {
+  if (!("indexedDB" in window) || !key) return "";
+  const database = await openCache();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(COVER_STORE, "readonly");
+    const request = transaction.objectStore(COVER_STORE).get(key);
+    transaction.oncomplete = () => { database.close(); resolve(request.result?.image || ""); };
+    transaction.onerror = () => { database.close(); reject(transaction.error); };
   });
 }
 
@@ -647,8 +691,13 @@ export async function cacheWork(work) {
   if (!("indexedDB" in window) || !work?.key) return;
   const database = await openCache();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(WORK_STORE, "readwrite");
-    transaction.objectStore(WORK_STORE).put({ key: work.key, work, version: CACHE_VERSION, updatedAt: Date.now() });
+    const transaction = database.transaction([WORK_STORE, COVER_STORE], "readwrite");
+    const embeddedCover = work.image?.startsWith("data:") ? work.image : "";
+    const storedWork = embeddedCover ? { ...work, image: "" } : work;
+    const updatedAt = Date.now();
+    transaction.objectStore(WORK_STORE).put({ key: work.key, work: storedWork, version: CACHE_VERSION, updatedAt });
+    if (embeddedCover) transaction.objectStore(COVER_STORE).put({ key: work.key, image: embeddedCover, updatedAt });
+    else transaction.objectStore(COVER_STORE).delete(work.key);
     transaction.oncomplete = () => { database.close(); resolve(); };
     transaction.onerror = () => { database.close(); reject(transaction.error); };
   });
@@ -658,8 +707,9 @@ export async function removeCachedWork(key) {
   if (!("indexedDB" in window) || !key) return;
   const database = await openCache();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(WORK_STORE, "readwrite");
+    const transaction = database.transaction([WORK_STORE, COVER_STORE], "readwrite");
     transaction.objectStore(WORK_STORE).delete(key);
+    transaction.objectStore(COVER_STORE).delete(key);
     transaction.oncomplete = () => { database.close(); resolve(); };
     transaction.onerror = () => { database.close(); reject(transaction.error); };
   });

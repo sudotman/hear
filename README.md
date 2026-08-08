@@ -1,27 +1,30 @@
 # hear
 
-![hear home screen](docs/images/hear-home.png)
+![hear home screen](docs/images/hear.png)
 
-hear is a private, browser-based listening library for wikipedia articles, public-domain books, and drm-free epubs. it cleans text for narration, remembers listening progress, and keeps books, audio, and preferences on this device.
+hear is a private, browser-based listening library for wikipedia articles, public-domain books, and drm-free epubs. it cleans text for narration, remembers listening progress, and keeps books, audio, and preferences on this device. think amazon audible but without having to pay bezos!
 
 ## what it supports
 
-- browse standard ebooks and project gutenberg catalogs;
-- open wikipedia articles without citation markers, references, tables, or navigation furniture in the narration;
-- import epub 2 and epub 3 files, including metadata, covers, reading order, chapters, lists, and table-based dramatic dialogue;
-- save works to my library and continue the most recent work;
-- navigate by chapter, seek through a work, change playback speed, skip 15 seconds, and resume saved progress;
-- use media session controls and a real `<audio>` element for natural-voice playback on iphone control center and the lock screen.
+- browse standard ebooks and project gutenberg catalogs
+- open wikipedia articles without citation markers, references, tables, or navigation furniture in the narration
+- import epub 2 and epub 3 files, including metadata, covers, reading order, chapters, lists, and table-based dramatic dialogue
+- save works to my library and continue the most recent work
+- navigate by chapter, seek through a work, change playback speed, skip 15 seconds, and resume saved progress
+- use media session controls and a real `<audio>` element for natural-voice playback on iphone control center and the lock screen
 
 catalog metadata comes from the public catalogs. standard ebooks uses its compatible epub editions. project gutenberg text is loaded from the corresponding [gitenberg](https://www.gitenberg.org/) mirror and remains linked to the original [gutenberg](https://www.gutenberg.org/) edition.
 
 ## voices
 
-voice and compute choices are explicit and saved on this device. fresh installs use the instant system voice. there is no automatic benchmark or model download on page load or refresh.
+voice and compute choices are explicit and saved on this device. fresh installs use the instant system voice. please configure it yourself for a better natural voice! 
 
+the voices are;
 - **instant — system voice:** the browser's web speech api. it starts immediately and is the fallback for non-english works.
 - **efficient — kitten:** kitten nano 15m, `onnx-community/KittenTTS-Nano-v0.8-ONNX`, `fp32`, and `wasm` through `onnxruntime-web/wasm`.
 - **natural — kokoro:** kokoro 82m, `onnx-community/Kokoro-82M-v1.0-ONNX`; use `q8` with `wasm` or `fp32` with `webgpu`.
+
+i personal recommend kitten-mini for the smoothest playback
 
 the kokoro device choice (`wasm` or `webgpu`) is explicit and saved. webgpu is probed only after choosing kokoro + webgpu, with a cached probe, a `gpu in navigator` guard, an android warning, and fallback to wasm. the active model row shows the selected repository, dtype, and device.
 
@@ -31,7 +34,7 @@ safari does not expose its native “listen to page” siri voice to web page ja
 
 ## privacy
 
-imported book text, generated audio, listening history, progress, and voice preferences are not sent to a hear server. cached works use indexeddb; preferences and progress use browser storage. source links and attribution remain attached to catalog works.
+imported book text, generated audio, listening history, progress, and voice preferences are not sent to any server. cached works use indexeddb; preferences and progress use browser storage. source links and attribution remain attached to catalog works.
 
 ## run locally
 
@@ -46,6 +49,7 @@ create a production build with `npm run build`; output is written to `dist/`.
 
 ```text
 wikipedia:          ?lang=en&title=apollo+11
+wikipedia (url):   ?url=https://en.wikipedia.org/wiki/Art
 standard ebooks:   ?source=standard&book=jane-austen/pride-and-prejudice
 project gutenberg: ?source=gutenberg&book=1342
 ```
@@ -54,7 +58,7 @@ imported epubs do not create shareable urls because their contents stay in that 
 
 ## webgpu stress test
 
-`/webgpu-test/` is a separate build entry for testing kokoro fp32. it reports real-time factor across 20 generations and keeps the last wav for inspection. run it on each target ios/safari release before allowing that release through the main app's webgpu probe.
+`/webgpu-test/` is a separate build entry for testing kokoro fp32. it reports real-time factor across 20 generations and keeps the last wav for inspection - not necessary anymore
 
 ## deploy with cloudflare pages
 
@@ -70,7 +74,7 @@ cross-origin-opener-policy: same-origin
 cross-origin-embedder-policy: require-corp
 ```
 
-after the first deployment, attach `hear.satyam.lol` to the pages project and point dns at the cloudflare pages custom-domain target.
+the actions build under my subdomain i.e. hear.satyam.lol
 
 ## content and attribution
 

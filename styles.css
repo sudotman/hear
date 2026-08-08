@@ -302,7 +302,6 @@ body.library-open .site-header .header-search {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.16em;
-  text-transform: uppercase;
 }
 
 .start-copy h1 {
@@ -945,6 +944,15 @@ body.library-open .site-header .header-search {
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.article-result .book-card > small {
+  display: -webkit-box;
+  min-height: 2.8em;
+  line-height: 1.4;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .book-progress {
@@ -3712,6 +3720,10 @@ input[type="range"]::-moz-range-thumb {
   display: flex;
   align-items: flex-end;
   flex-direction: column;
+}
+
+.catalog-controls[hidden] {
+  display: none;
 }
 
 .source-switcher,

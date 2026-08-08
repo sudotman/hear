@@ -3,6 +3,7 @@ import {
   fetchGutenbergCatalog,
   fetchStandardCatalog,
   fetchStandardItemFromSlug,
+  getCachedCover,
   getCachedWork,
   loadGutenbergWork,
   loadStandardWork,
@@ -49,6 +50,7 @@ const elements = {
   catalogSubmitLabel: $("#catalog-submit-label"),
   discoveryHint: $("#discovery-hint"),
   searchModes: $$("[data-search-mode]"),
+  catalogControls: $("#catalog-controls"),
   sourceSwitcher: $("#source-switcher"),
   savedCount: $("#saved-count"),
   catalogTopics: $("#catalog-topics"),
@@ -345,6 +347,7 @@ const state = {
   discoveryMode: "books",
   catalogRequestId: 0,
   catalogAbortController: null,
+  libraryCoverCache: new Map(),
   contentAbortController: null,
   contentRequestId: 0,
   lastAnnouncement: "",
@@ -395,6 +398,8 @@ function rememberWork(work) {
   const entries = libraryEntries().filter((item) => item.key !== work.key);
   entries.unshift(entry);
   localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries.slice(0, 80)));
+  if (work.image?.startsWith("data:")) state.libraryCoverCache.set(work.key, work.image);
+  else state.libraryCoverCache.delete(work.key);
   elements.savedCount.textContent = String(Math.min(80, entries.length));
   updateContinueListening();
 }
@@ -430,26 +435,53 @@ function canDisplayImage(item) {
   return Boolean(displayImageSource(item));
 }
 
+function cachedCoverFor(item) {
+  if (!item?.key) return Promise.resolve("");
+  const cached = state.libraryCoverCache.get(item.key);
+  if (typeof cached === "string") return Promise.resolve(cached);
+  if (cached) return cached;
+  const request = getCachedCover(item.key)
+    .catch(() => "")
+    .then((image) => {
+      state.libraryCoverCache.set(item.key, image);
+      return image;
+    });
+  state.libraryCoverCache.set(item.key, request);
+  return request;
+}
+
+function appendBookCoverImage(cover, item, source = displayImageSource(item)) {
+  if (!source || cover.querySelector("img")) return;
+  const image = document.createElement("img");
+  image.crossOrigin = "anonymous";
+  image.src = source;
+  image.alt = "";
+  image.loading = "lazy";
+  image.addEventListener("load", () => cover.classList.add("has-image"), { once: true });
+  image.addEventListener("error", () => image.remove(), { once: true });
+  cover.prepend(image);
+}
+
 function renderBookCard(item, { removable = false } = {}) {
   const wrapper = document.createElement("article");
   wrapper.className = "book-item";
+  wrapper.classList.toggle("article-result", item.kind === "article");
   const button = document.createElement("button");
   button.className = "book-card";
   button.type = "button";
-  button.setAttribute("aria-label", `Open ${item.title} by ${item.author}`);
+  button.setAttribute(
+    "aria-label",
+    item.kind === "article" ? `Open ${item.title} from Wikipedia` : `Open ${item.title} by ${item.author}`,
+  );
 
   const cover = document.createElement("span");
   cover.className = "book-cover";
   cover.style.setProperty("--cover-hue", coverColor(item));
-  if (canDisplayImage(item)) {
-    const image = document.createElement("img");
-    image.crossOrigin = "anonymous";
-    image.src = displayImageSource(item);
-    image.alt = "";
-    image.loading = "lazy";
-    image.addEventListener("load", () => cover.classList.add("has-image"), { once: true });
-    image.addEventListener("error", () => image.remove(), { once: true });
-    cover.append(image);
+  if (canDisplayImage(item)) appendBookCoverImage(cover, item);
+  else if (item.key) {
+    cachedCoverFor(item).then((image) => {
+      if (image) appendBookCoverImage(cover, { ...item, image });
+    });
   }
   const source = document.createElement("span");
   source.className = "book-source";
@@ -465,7 +497,9 @@ function renderBookCard(item, { removable = false } = {}) {
   const title = document.createElement("h3");
   title.textContent = item.title;
   const author = document.createElement("small");
-  author.textContent = item.author || "Unknown author";
+  author.textContent = item.kind === "article"
+    ? item.description || "Wikipedia article"
+    : item.author || "Unknown author";
   button.append(cover, title, author);
 
   const progress = progressFor(item.key || item.id);
@@ -489,6 +523,7 @@ function renderBookCard(item, { removable = false } = {}) {
     remove.addEventListener("click", async () => {
       const entries = libraryEntries().filter((entry) => entry.key !== item.key);
       localStorage.setItem(LIBRARY_KEY, JSON.stringify(entries));
+      state.libraryCoverCache.delete(item.key);
       const progress = progressEntries();
       delete progress[item.key];
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
@@ -593,23 +628,37 @@ function chooseCatalogSource(source) {
   loadCatalog();
 }
 
-function setDiscoveryMode(mode, { focus = true } = {}) {
-  state.discoveryMode = mode === "wikipedia" ? "wikipedia" : "books";
+function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
+  const nextMode = mode === "wikipedia" ? "wikipedia" : "books";
+  const changed = state.discoveryMode !== nextMode;
+  state.discoveryMode = nextMode;
   const isWikipedia = state.discoveryMode === "wikipedia";
   elements.searchModes.forEach((button) => {
     const selected = button.dataset.searchMode === state.discoveryMode;
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
   });
-  elements.catalogSearchLabel.textContent = isWikipedia ? "Open a Wikipedia article" : "Search public-domain books";
-  elements.catalogQuery.placeholder = isWikipedia ? "Article title or Wikipedia link" : "Title, author, or subject";
-  elements.catalogSubmit.setAttribute("aria-label", isWikipedia ? "Open Wikipedia article" : "Search public-domain books");
-  elements.catalogSubmitLabel.textContent = isWikipedia ? "Open article" : "Search books";
+  elements.catalogSearchLabel.textContent = isWikipedia ? "Search or open Wikipedia" : "Search public-domain books";
+  elements.catalogQuery.placeholder = isWikipedia ? "Search Wikipedia or paste an article link" : "Title, author, or subject";
+  elements.catalogSubmit.setAttribute("aria-label", isWikipedia ? "Search Wikipedia" : "Search public-domain books");
+  elements.catalogSubmitLabel.textContent = isWikipedia ? "Search Wikipedia" : "Search books";
   elements.discoveryHint.textContent = isWikipedia
-    ? "Citation numbers, tables, and references are left out of the narration."
+    ? "Search by topic, then choose the article you want to hear."
     : "Search Standard Ebooks and Project Gutenberg.";
   elements.importInlineButton.hidden = isWikipedia;
   elements.setupButton.hidden = !isWikipedia;
+  elements.catalogControls.hidden = isWikipedia;
+  if (changed && isWikipedia) {
+    state.catalogAbortController?.abort();
+    state.catalogItems = [];
+    elements.bookGrid.replaceChildren();
+    elements.catalogEyebrow.textContent = "Wikipedia";
+    elements.catalogTitle.textContent = "Find an article to hear";
+    elements.catalogStatus.textContent = "Enter a person, place, event, or idea above.";
+    elements.loadMore.hidden = true;
+  } else if (changed && refresh) {
+    loadCatalog();
+  }
   if (focus) elements.catalogQuery.focus();
 }
 
@@ -629,14 +678,24 @@ function updateContinueListening() {
   elements.continueProgress.style.width = `${ratio * 100}%`;
   elements.continueLabel.textContent = `${Math.round(ratio * 100)}% listened · resume`;
   const fallback = $("i", elements.continueCover);
-  if (canDisplayImage(entry)) {
-    elements.continueImage.src = displayImageSource(entry);
+  const imageSource = displayImageSource(entry);
+  if (imageSource) {
+    elements.continueImage.src = imageSource;
     elements.continueImage.hidden = false;
     fallback.hidden = true;
   } else {
+    elements.continueImage.removeAttribute("src");
     elements.continueImage.hidden = true;
     fallback.hidden = false;
     fallback.textContent = entry.title[0]?.toUpperCase() || "H";
+    cachedCoverFor(entry).then((image) => {
+      if (!image || elements.continueButton.dataset.key !== entry.key) return;
+      const source = displayImageSource({ ...entry, image });
+      if (!source) return;
+      elements.continueImage.src = source;
+      elements.continueImage.hidden = false;
+      fallback.hidden = true;
+    });
   }
 }
 
@@ -677,7 +736,7 @@ function showLibraryView({ scrollTop = true } = {}) {
   document.title = "Hear — the written world, spoken";
   if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
   updateContinueListening();
-  if (!state.catalogItems.length && !state.catalogAbortController) loadCatalog();
+  if (state.discoveryMode === "books" && !state.catalogItems.length && !state.catalogAbortController) loadCatalog();
 }
 
 function showReaderView({ scrollTop = true } = {}) {
@@ -882,6 +941,99 @@ function articleImageFromSummary(summary) {
   const thumbnail = summary?.thumbnail?.source;
   if (thumbnail) return thumbnail.replace(/\/\d+px-/, "/1280px-");
   return summary?.originalimage?.source || "";
+}
+
+function wikipediaSearchImage(page, origin) {
+  const source = page?.thumbnail?.url || "";
+  if (!source) return "";
+  try {
+    return new URL(source, origin).href.replace(/\/\d+px-/, "/640px-");
+  } catch {
+    return "";
+  }
+}
+
+function wikipediaSearchDescription(page) {
+  if (page?.description) return cleanText(page.description);
+  const document = new DOMParser().parseFromString(page?.excerpt || "", "text/html");
+  return conciseText(document.body.textContent, 180) || "Wikipedia article";
+}
+
+async function fetchWikipediaSearch(parsed, { signal, limit = 15 } = {}) {
+  const lang = safeLanguage(parsed.lang);
+  const origin = `https://${lang}.wikipedia.org`;
+  const url = new URL("/w/rest.php/v1/search/page", origin);
+  url.searchParams.set("q", parsed.title.trim());
+  url.searchParams.set("limit", String(limit));
+  const response = await fetchWithTimeout(url.href, { headers: { Accept: "application/json" }, signal });
+  if (!response.ok) throw new Error("Wikipedia search didn’t respond. Try again in a moment.");
+  const payload = await response.json();
+  return (payload.pages || []).map((page) => {
+    const title = cleanText(page.title || page.key?.replaceAll("_", " ") || "Untitled article");
+    const pageKey = page.key || title.replaceAll(" ", "_");
+    return {
+      key: `wikipedia:${lang}:${title}`,
+      kind: "article",
+      lang,
+      title,
+      author: "Wikipedia contributors",
+      description: wikipediaSearchDescription(page),
+      image: wikipediaSearchImage(page, origin),
+      source: "wikipedia",
+      sourceLabel: "Wikipedia",
+      sourceUrl: `${origin}/wiki/${encodeURIComponent(pageKey)}`,
+      catalogItem: null,
+    };
+  }).filter((item) => item.title);
+}
+
+async function searchWikipedia(parsed, { scroll = true } = {}) {
+  state.catalogAbortController?.abort();
+  const controller = new AbortController();
+  const requestId = ++state.catalogRequestId;
+  state.catalogAbortController = controller;
+  elements.catalogControls.hidden = true;
+  elements.bookGrid.replaceChildren();
+  elements.catalogEyebrow.textContent = `${safeLanguage(parsed.lang).toUpperCase()} Wikipedia`;
+  elements.catalogTitle.textContent = `Results for “${parsed.title.trim()}”`;
+  elements.catalogStatus.textContent = "Searching Wikipedia…";
+  elements.loadMore.hidden = true;
+
+  try {
+    const items = await fetchWikipediaSearch(parsed, { signal: controller.signal });
+    if (requestId !== state.catalogRequestId) return;
+    state.catalogItems = items;
+    renderCatalogItems(items);
+    elements.catalogStatus.textContent = items.length
+      ? `${items.length} matching ${items.length === 1 ? "article" : "articles"} · choose one to prepare for listening`
+      : "No matching articles were found. Try a broader search.";
+    if (scroll) elements.catalogTitle.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    if (requestId !== state.catalogRequestId || isAbortError(error)) return;
+    elements.catalogStatus.textContent = error.message || "Wikipedia search didn’t respond.";
+  } finally {
+    if (state.catalogAbortController === controller) state.catalogAbortController = null;
+  }
+}
+
+function handleWikipediaInput(rawInput, { fromHeader = false } = {}) {
+  let parsed;
+  try {
+    parsed = parseArticleInput(rawInput);
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
+  if (parsed.fromUrl) {
+    loadArticle(rawInput);
+    return;
+  }
+  if (fromHeader) {
+    setDiscoveryMode("wikipedia", { focus: false });
+    elements.catalogQuery.value = rawInput.trim();
+    navigateToLibrary();
+  }
+  searchWikipedia(parsed);
 }
 
 async function fetchArticle(title, language, allowSearch = true, { signal } = {}) {
@@ -3150,7 +3302,7 @@ elements.continueButton.addEventListener("click", () => {
 elements.catalogSearch.addEventListener("submit", (event) => {
   event.preventDefault();
   if (state.discoveryMode === "wikipedia") {
-    loadArticle(elements.catalogQuery.value);
+    handleWikipediaInput(elements.catalogQuery.value);
     return;
   }
   state.catalogQuery = elements.catalogQuery.value;
@@ -3174,14 +3326,14 @@ elements.searchModes.forEach((button) => {
 
 $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
   button.addEventListener("click", () => {
-    setDiscoveryMode("books", { focus: false });
+    setDiscoveryMode("books", { focus: false, refresh: false });
     chooseCatalogSource(button.dataset.source);
   });
 });
 
 $$('button[data-topic]', elements.catalogTopics).forEach((button) => {
   button.addEventListener("click", () => {
-    setDiscoveryMode("books", { focus: false });
+    setDiscoveryMode("books", { focus: false, refresh: false });
     state.catalogQuery = button.dataset.topic;
     elements.catalogQuery.value = button.dataset.topic;
     if (state.catalogSource === "saved") state.catalogSource = "all";
@@ -3202,7 +3354,7 @@ elements.loadMore.addEventListener("click", () => {
 
 elements.headerSearch.addEventListener("submit", (event) => {
   event.preventDefault();
-  loadArticle(elements.headerQuery.value);
+  handleWikipediaInput(elements.headerQuery.value, { fromHeader: true });
 });
 
 $$('[data-article]').forEach((button) => {
