@@ -77,7 +77,7 @@
           <aside class="continue-listening" id="continue-listening" aria-labelledby="continue-title" hidden>
             <p class="eyebrow">Continue listening</p>
             <button type="button" id="continue-button">
-              <span class="continue-cover" id="continue-cover"><i>H</i><img id="continue-image" alt="" hidden /></span>
+              <span class="continue-cover" id="continue-cover"><i>H</i><img id="continue-image" alt="" crossorigin="anonymous" hidden /></span>
               <span class="continue-copy">
                 <strong id="continue-title">Your last book</strong>
                 <small id="continue-author">Ready when you are</small>
@@ -172,7 +172,7 @@
             </button>
           </div>
           <figure class="article-image-wrap" id="article-image-wrap" hidden>
-            <img id="article-image" alt="" />
+            <img id="article-image" alt="" crossorigin="anonymous" />
             <figcaption id="image-caption">Image from Wikimedia Commons</figcaption>
           </figure>
           <div class="article-placeholder" id="article-placeholder" aria-hidden="true">
@@ -204,9 +204,9 @@
     <section class="player" id="player" aria-label="Audio controls" hidden>
       <audio id="media-audio" preload="auto" playsinline></audio>
       <button class="player-now" id="now-playing-button" type="button" aria-label="Return to the current work">
-        <span class="mini-cover" id="mini-cover"><span>W</span><img id="mini-cover-image" alt="" hidden /></span>
+        <span class="mini-cover" id="mini-cover"><span>W</span><img id="mini-cover-image" alt="" crossorigin="anonymous" hidden /></span>
         <span class="now-copy">
-          <span id="now-section">Ready to listen</span>
+          <span id="now-section" role="status" aria-live="polite">Ready to listen</span>
           <strong id="now-title">Hear</strong>
         </span>
       </button>
@@ -531,6 +531,7 @@
       <p id="loading-title">Editing for your ears…</p>
       <span id="loading-detail">Removing citations and references</span>
       <div class="loading-progress" id="loading-progress" hidden><i></i></div>
+      <button class="loading-cancel" id="loading-cancel" type="button" hidden>Cancel preparation</button>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

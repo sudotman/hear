@@ -317,7 +317,7 @@ export class KittenRuntime {
     this.onProgress?.({ status: "ready", file: "", progress: 100 });
   }
 
-  async generate(text, { voice = "Bella", speed = 1 } = {}) {
+  async generate(text, { voice = "Bella", speed = 1, onStage = null } = {}) {
     if (!this.session || !this.config || !this.voices) throw new Error("Kitten WASM is not loaded.");
     const voiceId = this.config.voice_aliases?.[voice] || voice;
     const voiceData = this.voices[voiceId];
@@ -344,6 +344,7 @@ export class KittenRuntime {
       text = normalizedText;
     }
     // Exact Python parity: single espeak call + basic_english_tokenize + TextCleaner
+    onStage?.("phonemize");
     const phonemesList = await new Promise((resolve, reject) => {
       // phonemizer espeak backend – preserve punctuation & stress like Python's EspeakBackend
       phonemize(text, "en-us").then(resolve, reject);
@@ -357,6 +358,7 @@ export class KittenRuntime {
     const adjustedSpeed = speed * (this.config.speed_priors?.[voiceId] || 1);
     let result;
     try {
+      onStage?.("synthesize");
       result = await this.session.run({
         input_ids: new ort.Tensor("int64", BigInt64Array.from(inputIds, BigInt), [1, inputIds.length]),
         style: new ort.Tensor("float32", style, [1, styleSize]),

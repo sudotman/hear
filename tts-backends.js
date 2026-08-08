@@ -110,7 +110,7 @@ class WorkerTtsBackend {
     request.resolve({ buffer: message.buffer, duration: message.duration, metrics: message.metrics });
   }
 
-  async generate(text, { voice = this.config.defaultVoice, speed = 1, priority = 2, epoch = this.epoch } = {}) {
+  async generate(text, { voice = this.config.defaultVoice, speed = 1, priority = 2, epoch = this.epoch, segmentKey = "" } = {}) {
     await this.load();
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
@@ -122,7 +122,7 @@ class WorkerTtsBackend {
         reject(error);
       }, GENERATION_TIMEOUT_MS);
       this.requests.set(id, { resolve, reject, timer, epoch });
-      this.worker.postMessage({ type: "generate", id, text, voice, speed, priority, epoch });
+      this.worker.postMessage({ type: "generate", id, text, voice, speed, priority, epoch, segmentKey });
     });
   }
 

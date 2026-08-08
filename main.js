@@ -140,6 +140,7 @@ const elements = {
   loadingTitle: $("#loading-title"),
   loadingDetail: $("#loading-detail"),
   loadingProgress: $("#loading-progress"),
+  loadingCancel: $("#loading-cancel"),
   toast: $("#toast"),
 };
 
@@ -328,6 +329,8 @@ const state = {
   pendingNeuralAction: null,
   mediaSwitching: false,
   lastAudioSave: 0,
+  neuralAdvanceTimer: null,
+  pendingSegmentIndex: null,
   rate: Number(localStorage.getItem(`${STORAGE_PREFIX}rate`)) || 1,
   follow: localStorage.getItem(`${STORAGE_PREFIX}follow`) !== "false",
   playback: "idle",
@@ -414,6 +417,7 @@ function renderBookCard(item, { removable = false } = {}) {
   cover.style.setProperty("--cover-hue", coverColor(item));
   if (item.image) {
     const image = document.createElement("img");
+    image.crossOrigin = "anonymous";
     image.src = item.image;
     image.alt = "";
     image.loading = "lazy";
@@ -582,6 +586,31 @@ function updateContinueListening() {
     fallback.textContent = entry.title[0]?.toUpperCase() || "H";
   }
 }
+
+function showContinueCoverFallback() {
+  const entry = libraryEntries().find((item) => item.key === elements.continueButton.dataset.key);
+  elements.continueImage.hidden = true;
+  const fallback = $("i", elements.continueCover);
+  fallback.hidden = false;
+  fallback.textContent = entry?.title?.[0]?.toUpperCase() || "H";
+}
+
+function showArticleImageFallback() {
+  elements.imageWrap.hidden = true;
+  elements.articlePlaceholder.hidden = false;
+  elements.articlePlaceholder.querySelector("span").textContent = state.article?.title?.[0]?.toUpperCase() || "H";
+}
+
+function showMiniCoverFallback() {
+  elements.miniCoverImage.hidden = true;
+  const fallback = $("span", elements.miniCover);
+  fallback.hidden = false;
+  fallback.textContent = state.article?.title?.[0]?.toUpperCase() || "H";
+}
+
+elements.continueImage.addEventListener("error", showContinueCoverFallback);
+elements.articleImage.addEventListener("error", showArticleImageFallback);
+elements.miniCoverImage.addEventListener("error", showMiniCoverFallback);
 
 function showLibraryView({ scrollTop = true } = {}) {
   elements.reader.hidden = true;
@@ -989,7 +1018,7 @@ function createSpeechChunks(article) {
   return chunks;
 }
 
-function createNeuralSegments(chunks) {
+function createNeuralSegments(chunks, { sentenceBoundaries = false } = {}) {
   const segments = [];
   let current = null;
 
@@ -1012,13 +1041,17 @@ function createNeuralSegments(chunks) {
         endWord: startWord,
         wordCount: 0,
         blockId: chunk.blockId,
+        endBlockId: chunk.blockId,
         section: chunk.section,
         sectionId: chunk.sectionId,
+        endsSentence: false,
       };
     }
     current.text += `${current.text ? " " : ""}${text}`;
     current.endChunk = chunkIndex + 1;
     current.endWord = startWord + pieceWords;
+    current.endBlockId = chunk.blockId;
+    current.endsSentence = /[.!?](?:[”’"']+)?$/.test(text.trim());
   };
 
   chunks.forEach((chunk, chunkIndex) => {
@@ -1070,10 +1103,33 @@ function createNeuralSegments(chunks) {
         commit();
       }
     }
+    // Kitten's small model can run adjacent sentences together even when the
+    // punctuation is correct. Give every speech chunk its own generation so
+    // each sentence starts with a fresh prosodic context.
+    if (sentenceBoundaries && current) commit();
   });
 
   commit();
+  if (sentenceBoundaries) {
+    segments.forEach((segment, index) => {
+      const next = segments[index + 1];
+      segment.pauseAfterMs = !next
+        ? 0
+        : segment.endBlockId !== next.blockId
+          ? 300
+          : segment.endsSentence
+            ? 180
+            : 80;
+    });
+  }
   return segments;
+}
+
+function rebuildNeuralSegments() {
+  state.neuralSegments = createNeuralSegments(state.chunks, {
+    sentenceBoundaries: state.backendPreference === "kitten",
+  });
+  state.currentSegmentIndex = neuralSegmentIndexForChunk(state.currentIndex);
 }
 
 function neuralSegmentIndexForWord(targetWord) {
@@ -1347,7 +1403,9 @@ function updateEngineUI() {
             : "Natural · on device";
   elements.voiceType.textContent = isNeural ? backendLabel : "Instant · system";
   elements.voiceName.textContent = isNeural
-    ? state.activeBackendId === "kitten-wasm" ? state.kittenVoice : NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
+    ? state.activeBackendId === "kitten-wasm" || state.backendPreference === "kitten"
+      ? state.kittenVoice
+      : NATURAL_VOICES[state.neuralVoice]?.name || "Heart"
     : state.selectedVoice?.name || "System voice";
   elements.voiceButton.setAttribute(
     "aria-label",
@@ -1355,9 +1413,9 @@ function updateEngineUI() {
   );
   elements.engineDescription.textContent = naturalVoiceAvailable()
     ? state.backendPreference === "kitten"
-      ? "Kitten Nano 15M · explicit WASM choice"
+      ? `Kitten · ${state.kittenModel} · ${state.kittenDtype} · WASM · explicit choice`
       : state.backendPreference === "kokoro"
-        ? "Kokoro 82M · explicit choice, WebGPU tested only after you pick it"
+        ? `Kokoro · onnx-community/Kokoro-82M-v1.0-ONNX · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"} · explicit choice`
         : state.backendPreference === "auto"
           ? "Auto is disabled – pick Kitten or Kokoro explicitly"
           : "Explicit choice saved – pick Kitten (efficient) or Kokoro (natural) — no auto download"
@@ -1541,6 +1599,8 @@ function setNeuralLoading(progress = null, detail = "Loading the natural voice")
   if (progress !== null) {
     elements.loadingProgress.style.setProperty("--download-progress", `${Math.min(100, Math.max(0, progress))}%`);
   }
+  elements.loadingCancel.hidden = false;
+  elements.loadingView.dataset.kind = "voice";
   elements.loadingView.hidden = false;
 }
 
@@ -1548,6 +1608,8 @@ function hideLoading() {
   elements.loadingView.hidden = true;
   elements.loadingProgress.hidden = true;
   elements.loadingProgress.style.setProperty("--download-progress", "0%");
+  elements.loadingCancel.hidden = true;
+  elements.loadingView.dataset.kind = "";
 }
 
 function clearNeuralInitTimer() {
@@ -1823,7 +1885,7 @@ function ttsCallbacks() {
         const label = file.includes("voices") ? "voices.npz" : file || "voice model";
         setNeuralLoading(pct ?? 100, `Loading ${label} [cached · ${backendLabel}]${pct !== null ? ` · ${pct}%` : ""}`);
         if (state.playback === "buffering") {
-          elements.nowSection.textContent = file ? `Loading ${file.split("/").pop()} [cached · ${backendLabel}]` : `Loading voice [cached · ${backendLabel}]`;
+          setPlayerStatus(file ? `Loading ${file.split("/").pop()} · cached · ${backendLabel}` : `Loading cached voice · ${backendLabel}`);
         }
         return;
       }
@@ -1849,7 +1911,7 @@ function ttsCallbacks() {
       }
       // Also surface in player bar while buffering
       if (state.playback === "buffering") {
-        elements.nowSection.textContent = file ? `Downloading ${file.split("/").pop()} · ${pct !== null ? pct + "%" : ""} [${backendLabel}]` : `Preparing voice files [${backendLabel}]`;
+        setPlayerStatus(file ? `Downloading ${file.split("/").pop()} · ${pct !== null ? pct + "% · " : ""}${backendLabel}` : `Preparing voice files · ${backendLabel}`);
       }
     },
     onReady(message) {
@@ -1871,19 +1933,22 @@ function ttsCallbacks() {
       updateEngineUI();
       // Immediately kick off generation for the queued segment – ensure not stuck at 100%
       if (state.playback === "buffering") {
-        elements.nowSection.textContent = `Synthesizing [${message.backend || state.backendPreference}]…`;
+        setPlayerStatus(`Synthesizing first sentence · ${message.backend || state.backendPreference}`);
       }
     },
     onGenerating(message) {
       const backendLabel = message?.backend || state.activeBackendId || state.backendPreference || "local";
       const total = state.neuralSegments?.length || null;
-      const idx = state.currentSegmentIndex + 1;
+      const messageIndex = Number.parseInt(message?.segmentKey, 10);
+      const idx = Number.isInteger(messageIndex) ? messageIndex + 1 : state.currentSegmentIndex + 1;
       const segLabel = total ? `segment ${idx}/${total}` : "passage";
+      const stage = message?.stage;
+      const action = stage === "phonemize" ? "Reading punctuation" : stage === "encoding" ? "Finishing audio" : "Synthesizing";
       if (state.playback === "buffering") {
-        elements.nowSection.textContent = total ? `Generating ${segLabel} [${backendLabel}]` : `Generating on this device [${backendLabel}]`;
+        setPlayerStatus(`${action} ${segLabel} · ${backendLabel}`);
       }
       if (state.neuralShowLoading) {
-        setNeuralLoading(null, `Synthesizing ${segLabel} [${backendLabel}]`);
+        setNeuralLoading(null, `${action} ${segLabel} [${backendLabel}]`);
       }
     },
     onMetric(metric) {
@@ -1898,7 +1963,7 @@ function ttsCallbacks() {
       state.neuralReady = false;
       console.error("[Hear TTS] backend failure", error);
       hideLoading();
-      setPlaybackState("paused");
+      setPlaybackState("error", "Voice engine stopped · press play to retry");
       showToast(error.message || "Voice failed to start — try another dtype/model or clear cache");
       updateEngineUI();
     },
@@ -2034,7 +2099,11 @@ async function ensureNeuralWorker({ background = false } = {}) {
     await state.ttsBackend.load();
     return state.ttsBackend;
   }
-  const pendingLabel = state.backendPreference === "kitten" ? "Kitten Nano 15M" : state.backendPreference === "kokoro" ? "Kokoro 82M" : "local voice";
+  const pendingLabel = state.backendPreference === "kitten"
+    ? `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenDtype} · WASM`
+    : state.backendPreference === "kokoro"
+      ? `Kokoro 82M · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"}`
+      : "local voice";
   if (!background) setNeuralLoading(null, `Starting ${pendingLabel} [explicit: ${state.backendPreference}]`);
   const backend = await createSelectedBackend();
   if (!backend) {
@@ -2086,7 +2155,7 @@ async function generateNeuralText(text, segmentKey = "", priority = 2, epoch = s
     trimNeuralCache();
     return entry;
   }
-  const result = await backend.generate(text, { voice, speed: 1, priority, epoch });
+  const result = await backend.generate(text, { voice, speed: 1, priority, epoch, segmentKey });
   if (epoch !== state.generationEpoch) {
     const error = new Error("Discarded audio from an earlier playback position.");
     error.name = "StaleGenerationError";
@@ -2261,6 +2330,10 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   const segment = state.neuralSegments[segmentIndex];
   if (!segment) return;
 
+  window.clearTimeout(state.neuralAdvanceTimer);
+  state.neuralAdvanceTimer = null;
+  state.pendingSegmentIndex = null;
+
   state.runId += 1;
   if (supportsSpeech) synth.cancel();
   const runId = ++state.neuralRunId;
@@ -2273,12 +2346,17 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
   state.currentIndex = safeIndex;
   state.currentSegmentIndex = segmentIndex;
   state.boundaryWords = 0;
-  setPlaybackState("buffering");
-  elements.nowSection.textContent = "Generating on this device";
+  setPlaybackState("buffering", `Preparing segment ${segmentIndex + 1}/${state.neuralSegments.length} · on device`);
   updateProgress(targetWord ?? segment.startWord);
 
   try {
-    const audio = await prepareAudioBuffer(segmentIndex, { startup: true, epoch });
+    // Sentence-sized Kitten passages should begin as soon as the current
+    // sentence is ready; subsequent sentences are filled in the background.
+    // Waiting for a time-based startup buffer here would make the smaller
+    // passages feel slower than the older multi-sentence batches.
+    const audio = state.backendPreference === "kitten"
+      ? await getNeuralSegment(segmentIndex, 0, epoch)
+      : await prepareAudioBuffer(segmentIndex, { startup: true, epoch });
     if (!audio || state.engine === "system") {
       state.currentIndex = safeIndex;
       startSpeechAt(safeIndex);
@@ -2321,7 +2399,7 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
       startSpeechAt(safeIndex);
       return;
     }
-    setPlaybackState("paused");
+    setPlaybackState("error", "Voice unavailable · press play to retry");
     updateActiveBlock(state.chunks[state.currentIndex]);
     if (error.name === "NotAllowedError") {
       showToast("Tap play once more to start audio.");
@@ -2338,12 +2416,17 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
 }
 
 function pauseNeural() {
+  window.clearTimeout(state.neuralAdvanceTimer);
+  state.neuralAdvanceTimer = null;
   elements.mediaAudio.pause();
   setPlaybackState("paused");
   savePosition();
 }
 
 function stopNeural(resetSource = false) {
+  window.clearTimeout(state.neuralAdvanceTimer);
+  state.neuralAdvanceTimer = null;
+  state.pendingSegmentIndex = null;
   state.neuralRunId += 1;
   state.mediaSwitching = true;
   elements.mediaAudio.pause();
@@ -2357,9 +2440,27 @@ function stopNeural(resetSource = false) {
   state.mediaSwitching = false;
 }
 
-function setPlaybackState(nextState) {
+function setPlayerStatus(detail = "") {
+  const section = state.chunks[state.currentIndex]?.section || "Opening";
+  const defaultLabel = state.playback === "playing"
+    ? `Listening · ${section}`
+    : state.playback === "paused"
+      ? `Paused · ${section}`
+      : state.playback === "buffering"
+        ? "Preparing local voice"
+        : state.playback === "ended"
+          ? "Finished"
+          : state.playback === "error"
+            ? "Playback needs attention"
+            : `Ready · ${section}`;
+  elements.nowSection.textContent = detail || defaultLabel;
+}
+
+function setPlaybackState(nextState, detail = "") {
   state.playback = nextState;
   elements.player.dataset.state = nextState;
+  elements.player.setAttribute("aria-busy", String(nextState === "buffering"));
+  setPlayerStatus(detail);
   const playing = nextState === "playing";
   elements.playButton.setAttribute("aria-label", playing ? "Pause" : nextState === "buffering" ? "Cancel voice preparation" : "Play");
   const heroLabel = $("span:last-child", elements.heroPlay);
@@ -2369,6 +2470,8 @@ function setPlaybackState(nextState) {
       ? "Cancel preparation"
       : nextState === "paused"
         ? "Resume listening"
+        : nextState === "error"
+          ? "Retry listening"
         : "Start listening";
   if ("mediaSession" in navigator) {
     navigator.mediaSession.playbackState = playing || (nextState === "buffering" && state.engine === "neural")
@@ -2445,7 +2548,7 @@ function speakChunk(runId) {
 
   utterance.onerror = (event) => {
     if (runId !== state.runId || event.error === "canceled" || event.error === "interrupted") return;
-    setPlaybackState("paused");
+    setPlaybackState("error", "System voice stopped · press play to retry");
     showToast("The voice paused unexpectedly. Press play to continue.");
   };
 
@@ -2477,7 +2580,13 @@ function togglePlayback() {
       pauseNeural();
       return;
     }
-    if (state.playback === "paused" && elements.mediaAudio.src && state.currentAudioUrl === elements.mediaAudio.src) {
+    if (state.playback === "paused" && state.pendingSegmentIndex !== null) {
+      const nextSegment = state.pendingSegmentIndex;
+      state.pendingSegmentIndex = null;
+      playNeuralFromChunk(state.neuralSegments[nextSegment].startChunk, state.neuralSegments[nextSegment].startWord);
+      return;
+    }
+    if (state.playback === "paused" && !elements.mediaAudio.ended && elements.mediaAudio.src && state.currentAudioUrl === elements.mediaAudio.src) {
       elements.mediaAudio.playbackRate = state.rate;
       elements.mediaAudio.play().then(() => setPlaybackState("playing")).catch(() => {
         playNeuralFromChunk(state.currentIndex, currentWordPosition());
@@ -2560,7 +2669,7 @@ function skipSeconds(seconds) {
 
 function updateActiveBlock(chunk) {
   if (!chunk) return;
-  elements.nowSection.textContent = chunk.section;
+  if (state.playback !== "buffering" && state.playback !== "error") setPlayerStatus();
 
   if (chunk.blockId && chunk.blockId !== state.activeBlockId) {
     if (state.activeBlockId) document.getElementById(state.activeBlockId)?.classList.remove("is-speaking");
@@ -2744,12 +2853,12 @@ function activateWork(work) {
   clearNeuralCache();
   state.article = work;
   state.chunks = createSpeechChunks(work);
-  state.neuralSegments = createNeuralSegments(state.chunks);
   const storedBackend = localStorage.getItem(`${STORAGE_PREFIX}tts-backend`);
   const persisted = storedBackend === "auto" ? "system" : storedBackend;
   state.backendPreference = work.lang.toLowerCase().startsWith("en") ? persisted || "system" : "system";
   state.engine = state.backendPreference === "system" ? "system" : "neural";
   state.currentIndex = 0;
+  rebuildNeuralSegments();
   state.currentSegmentIndex = 0;
   state.boundaryWords = 0;
   state.activeBlockId = null;
@@ -2882,7 +2991,7 @@ async function selectEngine(nextEngine) {
   state.engine = nextEngine === "system" ? "system" : "neural";
   localStorage.setItem(`${STORAGE_PREFIX}tts-backend`, nextEngine);
   state.currentIndex = targetIndex;
-  state.currentSegmentIndex = neuralSegmentIndexForChunk(targetIndex);
+  rebuildNeuralSegments();
   updateEngineUI();
   updateActiveBlock(state.chunks[targetIndex]);
   updateProgress();
@@ -2914,8 +3023,7 @@ async function previewNaturalVoice() {
   requestNeuralAction(async () => {
     stopSpeech("paused");
     const runId = ++state.neuralRunId;
-    setPlaybackState("buffering");
-    elements.nowSection.textContent = "Preparing voice preview";
+    setPlaybackState("buffering", "Preparing voice preview · on device");
     try {
       const entry = await generateNeuralText(
         "A good book should sound as considered as it reads.",
@@ -3200,7 +3308,18 @@ elements.mediaAudio.addEventListener("ended", () => {
   if (state.engine !== "neural" || state.playback !== "playing") return;
   const nextSegment = state.currentSegmentIndex + 1;
   if (nextSegment >= state.neuralSegments.length) finishPlayback();
-  else playNeuralFromChunk(state.neuralSegments[nextSegment].startChunk, state.neuralSegments[nextSegment].startWord);
+  else {
+    const finishedSegment = state.neuralSegments[state.currentSegmentIndex];
+    const advance = () => {
+      state.neuralAdvanceTimer = null;
+      if (state.playback !== "playing" || state.pendingSegmentIndex !== nextSegment) return;
+      playNeuralFromChunk(state.neuralSegments[nextSegment].startChunk, state.neuralSegments[nextSegment].startWord);
+    };
+    state.pendingSegmentIndex = nextSegment;
+    const pauseMs = state.backendPreference === "kitten" ? finishedSegment.pauseAfterMs || 0 : 0;
+    if (pauseMs) state.neuralAdvanceTimer = window.setTimeout(advance, pauseMs);
+    else advance();
+  }
 });
 
 elements.mediaAudio.addEventListener("pause", () => {
@@ -3224,8 +3343,17 @@ elements.mediaAudio.addEventListener("play", () => {
 
 elements.mediaAudio.addEventListener("error", () => {
   if (state.mediaSwitching || !elements.mediaAudio.getAttribute("src")) return;
-  setPlaybackState("paused");
+  setPlaybackState("error", "Audio stopped · press play to retry");
   showToast("Audio playback stopped. Press play to retry this passage.");
+});
+
+elements.loadingCancel.addEventListener("click", async () => {
+  if (state.playback !== "buffering") return;
+  stopNeural(false);
+  await resetNeuralWorker(new Error("Voice preparation cancelled.")).catch(() => {});
+  hideLoading();
+  updateActiveBlock(state.chunks[state.currentIndex]);
+  setPlaybackState("paused", "Preparation cancelled · press play to retry");
 });
 
 elements.setupButton.addEventListener("click", () => elements.setupSheet.showModal());

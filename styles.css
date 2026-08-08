@@ -1460,6 +1460,33 @@ body.library-open .site-header .header-search {
   white-space: nowrap;
 }
 
+#now-section::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.35);
+  content: "";
+}
+
+.player[data-state="playing"] #now-section::before {
+  background: var(--accent);
+}
+
+.player[data-state="buffering"] #now-section::before {
+  background: var(--accent);
+  animation: status-pulse 900ms ease-in-out infinite alternate;
+}
+
+.player[data-state="error"] #now-section {
+  color: #f1a781;
+}
+
+.player[data-state="error"] #now-section::before {
+  background: #f1a781;
+}
+
 .now-copy strong {
   display: block;
   overflow: hidden;
@@ -2406,6 +2433,23 @@ input[type="range"]::-moz-range-thumb {
   transition: width 180ms ease;
 }
 
+.loading-cancel {
+  margin-top: 25px;
+  padding: 10px 0 7px;
+  border: 0;
+  border-bottom: 1px solid rgba(241, 238, 229, 0.42);
+  color: rgba(241, 238, 229, 0.72);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.loading-cancel:hover,
+.loading-cancel:focus-visible {
+  color: var(--paper);
+  border-bottom-color: var(--accent);
+}
+
 .toast {
   position: fixed;
   z-index: 100;
@@ -2474,6 +2518,11 @@ input[type="range"]::-moz-range-thumb {
 
 @keyframes player-spin {
   to { transform: rotate(360deg); }
+}
+
+@keyframes status-pulse {
+  from { opacity: 0.35; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1.15); }
 }
 
 @media (max-width: 1050px) {

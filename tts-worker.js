@@ -88,17 +88,28 @@ async function generate(job) {
   if (job.epoch !== activeEpoch) return;
   const startedAt = performance.now();
   const queueWaitSeconds = (startedAt - job.enqueuedAt) / 1000;
-  self.postMessage({ type: "generating", id: job.id, epoch: job.epoch, priority: job.priority });
+  const postStage = (stage) => self.postMessage({
+    type: "generating",
+    id: job.id,
+    epoch: job.epoch,
+    priority: job.priority,
+    segmentKey: job.segmentKey,
+    backend: backend.id,
+    stage,
+  });
   try {
     let buffer;
     let duration;
     if (backend.id === "kitten-wasm") {
-      const output = await model.generate(job.text, { voice: job.voice, speed: job.speed });
+      const output = await model.generate(job.text, { voice: job.voice, speed: job.speed, onStage: postStage });
       duration = output.audio.length / output.samplingRate;
+      postStage("encoding");
       buffer = encodeWav(output.audio, output.samplingRate);
     } else {
+      postStage("synthesize");
       const output = await model.generate(job.text, { voice: job.voice, speed: job.speed });
       duration = output.audio.length / output.sampling_rate;
+      postStage("encoding");
       buffer = output.toWav();
     }
     const generationSeconds = (performance.now() - startedAt) / 1000;
