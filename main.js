@@ -24,6 +24,7 @@ import { libraryRouteState, routeForWork, routeStateForWork } from "./route-util
 import { registerHearServiceWorker } from "./pwa.js";
 import { KokoroWebGPU, KokoroWasm, KittenWasm } from "./tts-backends.js";
 import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, getTtsCacheStats, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
+import { selectLookaheadSegmentIndices, selectNeuralCacheEvictions, shareInFlight } from "./tts-scheduling.js";
 import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -296,12 +297,15 @@ const state = {
   engine: initialBackendPreference === "system" ? "system" : "neural",
   activeBackendId: null,
   ttsBackend: null,
+  neuralWorkerPromise: null,
+  neuralLoadInBackground: false,
   generationEpoch: 0,
   rtfSamples: [],
   bufferFillPromise: null,
   neuralVoice: localStorage.getItem(`${STORAGE_PREFIX}neural-voice`) || "af_heart",
   neuralReady: false,
   neuralCache: new Map(),
+  neuralInFlight: new Map(),
   neuralRunId: 0,
   currentSegmentIndex: 0,
   currentAudioUrl: null,
@@ -1690,10 +1694,9 @@ async function handleClearAudioCache() {
   const btn = elements.clearAudioCache;
   if (btn) btn.disabled = true;
   try {
+    if (state.engine === "neural") advanceGenerationEpoch();
     await clearTtsCache();
     clearNeuralCache();
-    // Also drop in-memory object URLs
-    state.neuralCache.clear?.();
     await refreshStorageLabel();
     showToast("Generated audio cleared — next play will regenerate");
     hideLoading();
@@ -1738,6 +1741,10 @@ async function handleClearAllData() {
 }
 
 function setNeuralLoading(progress = null, detail = "Loading the natural voice") {
+  if (state.neuralLoadInBackground && state.playback === "playing") {
+    setPlayerStatus(`${detail} · playback continues`, { announce: false });
+    return;
+  }
   const wasHidden = elements.loadingView.hidden;
   elements.loadingTitle.textContent = "Preparing your natural voice…";
   elements.loadingDetail.textContent = detail;
@@ -1816,6 +1823,7 @@ function ttsCallbacks() {
       }
     },
     onReady(message) {
+      const finishedBackgroundLoad = state.neuralLoadInBackground && state.playback === "playing";
       state.neuralReady = true;
       localStorage.setItem(`${STORAGE_PREFIX}neural-ready`, "true");
       state.activeBackendId = message.backend || state.activeBackendId;
@@ -1831,6 +1839,7 @@ function ttsCallbacks() {
       });
       hideLoading();
       updateEngineUI();
+      if (finishedBackgroundLoad) setPlayerStatus("", { announce: false });
       // Immediately kick off generation for the queued segment – ensure not stuck at 100%
       if (state.playback === "buffering") {
         setPlayerStatus(`Synthesizing first sentence · ${message.backend || state.backendPreference}`);
@@ -1888,7 +1897,7 @@ async function probeKokoroWebGpu() {
   if (cached) return cached;
   if (!("gpu" in navigator)) return { ok: false, reason: "unavailable" };
   localStorage.setItem(`${key}:pending`, "true");
-  const candidate = new KokoroWebGPU(ttsCallbacks(), { dtype: state.kokoroDtype });
+  const candidate = new KokoroWebGPU(ttsCallbacks(), { dtype: state.kokoroDtype, voice: state.neuralVoice });
   candidate.setEpoch(state.generationEpoch);
   try {
     setNeuralLoading(null, "Safely testing Kokoro WebGPU");
@@ -1913,7 +1922,7 @@ async function createSelectedBackend() {
     return new KittenWasm(ttsCallbacks(), { model: state.kittenModel, dtype: state.kittenDtype });
   }
   if (state.backendPreference === "kokoro") {
-    const opts = { dtype: state.kokoroDtype };
+    const opts = { dtype: state.kokoroDtype, voice: state.neuralVoice };
     // Explicit device saved as hearwiki:kokoro-device (wasm/webgpu). WebGPU is
     // crash-prone on Android, so respect the explicit value and only probe
     // when user chose webgpu – and never benchmark automatically.
@@ -1944,10 +1953,13 @@ async function resetNeuralWorker(error = new Error("The local voice engine was r
   state.generationEpoch += 1;
   state.neuralRunId += 1;
   state.neuralReady = false;
+  state.rtfSamples = [];
   state.bufferFillPromise = null;
   const backend = state.ttsBackend;
   state.ttsBackend = null;
   state.activeBackendId = null;
+  state.neuralWorkerPromise = null;
+  state.neuralLoadInBackground = false;
   await backend?.dispose();
   hideLoading();
   if (error.name !== "BackendRestartError") console.info("[Hear TTS] worker restart", error.message);
@@ -1958,74 +1970,194 @@ async function ensureNeuralWorker({ background = false } = {}) {
     await state.ttsBackend.load();
     return state.ttsBackend;
   }
-  const pendingLabel = state.backendPreference === "kitten"
-    ? `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenDtype} · WASM`
-    : state.backendPreference === "kokoro"
-      ? `Kokoro 82M · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"}`
-      : "local voice";
-  if (!background) setNeuralLoading(null, `Starting ${pendingLabel} [explicit: ${state.backendPreference}]`);
-  const backend = await createSelectedBackend();
-  if (!backend) {
-    state.engine = "system";
-    state.activeBackendId = "system";
+  if (state.neuralWorkerPromise) {
+    if (!background && state.neuralLoadInBackground) {
+      state.neuralLoadInBackground = false;
+      setNeuralLoading(null, "Finishing the selected local voice");
+    }
+    return state.neuralWorkerPromise;
+  }
+  const workerEpoch = state.generationEpoch;
+  state.neuralLoadInBackground = background;
+  const pending = (async () => {
+    const pendingLabel = state.backendPreference === "kitten"
+      ? `Kitten ${state.kittenModel.split("/").pop()} · ${state.kittenDtype} · WASM`
+      : state.backendPreference === "kokoro"
+        ? `Kokoro 82M · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"}`
+        : "local voice";
+    if (!background) setNeuralLoading(null, `Starting ${pendingLabel} [explicit: ${state.backendPreference}]`);
+    const backend = await createSelectedBackend();
+    if (!backend) {
+      state.engine = "system";
+      state.activeBackendId = "system";
+      updateEngineUI();
+      hideLoading();
+      return null;
+    }
+    if (workerEpoch !== state.generationEpoch) {
+      await backend.dispose();
+      const error = new Error("Discarded a voice engine started for an earlier playback position.");
+      error.name = "StaleGenerationError";
+      throw error;
+    }
+    state.ttsBackend = backend;
+    state.activeBackendId = backend.id;
+    backend.setEpoch(workerEpoch);
+    await backend.load();
+    if (workerEpoch !== state.generationEpoch || state.ttsBackend !== backend) {
+      await backend.dispose();
+      const error = new Error("Discarded a voice engine started for an earlier playback position.");
+      error.name = "StaleGenerationError";
+      throw error;
+    }
+    state.neuralReady = true;
     updateEngineUI();
     hideLoading();
-    return null;
+    return backend;
+  })();
+  state.neuralWorkerPromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (state.neuralWorkerPromise === pending) {
+      state.neuralWorkerPromise = null;
+      state.neuralLoadInBackground = false;
+    }
   }
-  state.ttsBackend = backend;
-  state.activeBackendId = backend.id;
-  backend.setEpoch(state.generationEpoch);
-  await backend.load();
-  state.neuralReady = true;
-  updateEngineUI();
-  hideLoading();
-  return backend;
 }
 
 function trimNeuralCache() {
-  if (state.neuralCache.size <= 16) return;
-  for (const [key, entry] of state.neuralCache) {
-    if (entry.url === state.currentAudioUrl) continue;
+  const evictions = selectNeuralCacheEvictions([...state.neuralCache], {
+    currentSegmentIndex: state.currentSegmentIndex,
+    currentAudioUrl: state.currentAudioUrl,
+    maxEntries: 16,
+  });
+  for (const key of evictions) {
+    const entry = state.neuralCache.get(key);
+    if (!entry) continue;
     URL.revokeObjectURL(entry.url);
     state.neuralCache.delete(key);
-    if (state.neuralCache.size <= 16) break;
   }
 }
 
-async function generateNeuralText(text, segmentKey = "", priority = 2, epoch = state.generationEpoch) {
-  const backend = await ensureNeuralWorker();
-  if (!backend) throw new Error("SystemVoiceFallback");
-  const voice = backend.id === "kitten-wasm" ? state.kittenVoice : state.neuralVoice;
-  const identity = backend.cacheIdentity;
-  const cacheKey = await createAudioCacheKey({
-    text,
-    model: identity.model,
-    voice,
-    speed: 1,
-    dtype: identity.dtype,
-  });
-  if (state.neuralCache.has(cacheKey)) return state.neuralCache.get(cacheKey);
-  const stored = await getCachedAudio(cacheKey).catch(() => null);
-  if (stored?.blob) {
-    const entry = { url: URL.createObjectURL(stored.blob), duration: stored.duration, cacheKey, segmentKey };
-    state.neuralCache.set(cacheKey, entry);
-    trimNeuralCache();
-    return entry;
+function selectedNeuralCacheConfig() {
+  if (state.ttsBackend) {
+    return {
+      identity: state.ttsBackend.cacheIdentity,
+      voice: state.ttsBackend.id === "kitten-wasm" ? state.kittenVoice : state.neuralVoice,
+    };
   }
-  const result = await backend.generate(text, { voice, speed: 1, priority, epoch, segmentKey });
-  if (epoch !== state.generationEpoch) {
-    const error = new Error("Discarded audio from an earlier playback position.");
-    error.name = "StaleGenerationError";
-    throw error;
+  if (state.backendPreference === "kitten") {
+    const version = state.kittenModel.includes("0.1")
+      ? "0.1"
+      : state.kittenModel.includes("int8")
+        ? "0.8-int8"
+        : "0.8";
+    return {
+      identity: { model: `${state.kittenModel}@${version}`, dtype: state.kittenDtype },
+      voice: state.kittenVoice,
+    };
   }
-  const blob = new Blob([result.buffer], { type: "audio/wav" });
-  const entry = { url: URL.createObjectURL(blob), duration: result.duration, cacheKey, segmentKey };
+  return {
+    identity: {
+      model: `${KOKORO_MODEL}@1.0`,
+      dtype: state.kokoroDevice === "webgpu" ? "fp32" : state.kokoroDtype,
+    },
+    voice: state.neuralVoice,
+  };
+}
+
+function staleGenerationError(message = "Discarded audio from an earlier playback position.") {
+  const error = new Error(message);
+  error.name = "StaleGenerationError";
+  return error;
+}
+
+function rememberNeuralEntry(cacheKey, stored, segmentKey) {
+  const entry = stored.url
+    ? stored
+    : { url: URL.createObjectURL(stored.blob), duration: stored.duration, cacheKey, segmentKey };
+  entry.segmentKey = segmentKey;
   state.neuralCache.set(cacheKey, entry);
-  putCachedAudio({ key: cacheKey, blob, duration: result.duration }).catch((error) => {
-    console.warn("[Hear TTS] could not persist generated audio", error);
-  });
   trimNeuralCache();
   return entry;
+}
+
+async function generateNeuralText(text, segmentKey = "", priority = 2, epoch = state.generationEpoch) {
+  const selected = selectedNeuralCacheConfig();
+  let cacheKey = await createAudioCacheKey({
+    text,
+    model: selected.identity.model,
+    voice: selected.voice,
+    speed: 1,
+    dtype: selected.identity.dtype,
+  });
+  const memoryEntry = state.neuralCache.get(cacheKey);
+  if (memoryEntry) {
+    memoryEntry.segmentKey = segmentKey;
+    trimNeuralCache();
+    return memoryEntry;
+  }
+  const inFlightKey = `${epoch}:${cacheKey}`;
+  let activeBackend = null;
+  let activeRequestKey = inFlightKey;
+  return shareInFlight(state.neuralInFlight, inFlightKey, {
+    priority,
+    onPriorityUpgrade(nextPriority) {
+      activeBackend?.reprioritize(activeRequestKey, nextPriority, epoch);
+    },
+    async start(inFlight) {
+      if (epoch !== state.generationEpoch) throw staleGenerationError();
+      const stored = await getCachedAudio(cacheKey).catch(() => null);
+      if (epoch !== state.generationEpoch) throw staleGenerationError();
+      if (stored?.blob) return rememberNeuralEntry(cacheKey, stored, segmentKey);
+
+      const backend = await ensureNeuralWorker({ background: inFlight.priority > 0 });
+      if (!backend) throw new Error("SystemVoiceFallback");
+      activeBackend = backend;
+      const voice = backend.id === "kitten-wasm" ? state.kittenVoice : state.neuralVoice;
+      const identity = backend.cacheIdentity;
+      if (
+        identity.model !== selected.identity.model ||
+        identity.dtype !== selected.identity.dtype ||
+        voice !== selected.voice
+      ) {
+        cacheKey = await createAudioCacheKey({
+          text,
+          model: identity.model,
+          voice,
+          speed: 1,
+          dtype: identity.dtype,
+        });
+        const actualMemoryEntry = state.neuralCache.get(cacheKey);
+        if (actualMemoryEntry) return rememberNeuralEntry(cacheKey, actualMemoryEntry, segmentKey);
+        const actualStored = await getCachedAudio(cacheKey).catch(() => null);
+        if (actualStored?.blob) return rememberNeuralEntry(cacheKey, actualStored, segmentKey);
+      }
+      if (epoch !== state.generationEpoch) throw staleGenerationError();
+      activeRequestKey = `${epoch}:${cacheKey}`;
+      const result = await backend.generate(text, {
+        voice,
+        speed: 1,
+        priority: inFlight.priority,
+        epoch,
+        segmentKey,
+        requestKey: activeRequestKey,
+      });
+      if (epoch !== state.generationEpoch) throw staleGenerationError();
+      const blob = new Blob([result.buffer], { type: "audio/wav" });
+      const entry = rememberNeuralEntry(cacheKey, {
+        url: URL.createObjectURL(blob),
+        duration: result.duration,
+        cacheKey,
+        segmentKey,
+      }, segmentKey);
+      putCachedAudio({ key: cacheKey, blob, duration: result.duration }).catch((error) => {
+        console.warn("[Hear TTS] could not persist generated audio", error);
+      });
+      return entry;
+    },
+  });
 }
 
 function getNeuralSegment(segmentIndex, priority = 2, epoch = state.generationEpoch) {
@@ -2047,23 +2179,33 @@ function bufferTargetSeconds() {
 }
 
 async function prepareAudioBuffer(startIndex, { epoch = state.generationEpoch } = {}) {
-  let bufferedSeconds = 0;
-  let first = null;
-  for (let index = startIndex; index < state.neuralSegments.length && bufferedSeconds < bufferTargetSeconds(); index += 1) {
-    const priority = index === startIndex ? 0 : index === startIndex + 1 ? 1 : 2;
-    const entry = await getNeuralSegment(index, priority, epoch);
-    if (epoch !== state.generationEpoch) throw new Error("Discarded stale buffer work.");
-    first ||= entry;
-    bufferedSeconds += entry.duration;
-  }
-  return first;
+  const indices = selectLookaheadSegmentIndices(
+    state.neuralSegments,
+    startIndex,
+    bufferTargetSeconds(),
+  );
+  const entries = await Promise.all(indices.map((index, offset) => (
+    // Preserve distance order even when Safari resolves IndexedDB/cache-key
+    // lookups out of order: next is priority 1, then 2, 3, and so on.
+    getNeuralSegment(index, offset + 1, epoch)
+  )));
+  if (epoch !== state.generationEpoch) throw staleGenerationError("Discarded stale buffer work.");
+  return entries[0] || null;
 }
 
 function maintainAudioBuffer(nextIndex, epoch = state.generationEpoch) {
-  if (state.bufferFillPromise || nextIndex >= state.neuralSegments.length) return;
+  if (
+    state.playback !== "playing" ||
+    state.bufferFillPromise ||
+    nextIndex >= state.neuralSegments.length
+  ) return;
   state.bufferFillPromise = prepareAudioBuffer(nextIndex, { epoch })
     .catch((error) => {
-      if (error.name !== "StaleGenerationError" && epoch === state.generationEpoch) {
+      if (
+        error.name !== "StaleGenerationError" &&
+        error.name !== "BackgroundGenerationCancelled" &&
+        epoch === state.generationEpoch
+      ) {
         console.warn("[Hear TTS] background buffer stopped", error);
       }
     })
@@ -2285,7 +2427,18 @@ function pauseNeural() {
   state.neuralAdvanceTimer = null;
   elements.mediaAudio.pause();
   setPlaybackState("paused");
+  state.ttsBackend?.cancelBackground(state.generationEpoch);
   savePosition();
+}
+
+function resumeNeuralBuffering() {
+  const epoch = state.generationEpoch;
+  const refill = () => {
+    if (epoch !== state.generationEpoch || state.playback !== "playing") return;
+    maintainAudioBuffer(state.currentSegmentIndex + 1, epoch);
+  };
+  if (state.bufferFillPromise) state.bufferFillPromise.then(refill, refill);
+  else refill();
 }
 
 function stopNeural(resetSource = false) {
@@ -2293,6 +2446,7 @@ function stopNeural(resetSource = false) {
   state.neuralAdvanceTimer = null;
   state.pendingSegmentIndex = null;
   state.neuralRunId += 1;
+  state.ttsBackend?.cancelBackground(state.generationEpoch);
   state.mediaSwitching = true;
   elements.mediaAudio.pause();
   elements.mediaAudio.loop = false;
@@ -2467,7 +2621,10 @@ function togglePlayback() {
     }
     if (state.playback === "paused" && !elements.mediaAudio.ended && elements.mediaAudio.src && state.currentAudioUrl === elements.mediaAudio.src) {
       elements.mediaAudio.playbackRate = state.rate;
-      elements.mediaAudio.play().then(() => setPlaybackState("playing")).catch(() => {
+      elements.mediaAudio.play().then(() => {
+        setPlaybackState("playing");
+        resumeNeuralBuffering();
+      }).catch(() => {
         playNeuralFromChunk(state.currentIndex, currentWordPosition());
       });
       return;
@@ -2505,6 +2662,13 @@ function stopSpeech(nextState = "idle") {
   setPlaybackState(nextState);
 }
 
+function advanceGenerationEpoch() {
+  state.generationEpoch += 1;
+  state.bufferFillPromise = null;
+  state.ttsBackend?.setEpoch(state.generationEpoch);
+  return state.generationEpoch;
+}
+
 function seekToIndex(index, preservePlaying = true, targetWord = null) {
   const wasPlaying = state.playback === "playing";
   state.currentIndex = Math.min(Math.max(0, index), Math.max(0, state.chunks.length - 1));
@@ -2514,10 +2678,8 @@ function seekToIndex(index, preservePlaying = true, targetWord = null) {
     // Keep the model loaded on seek — bump epoch to cancel in-flight generations
     // without disposing the backend. Previously this called resetNeuralWorker()
     // which tore down the worker and forced a re-download even for cached segments.
-    state.generationEpoch += 1;
+    advanceGenerationEpoch();
     state.neuralRunId += 1;
-    state.bufferFillPromise = null;
-    state.ttsBackend?.setEpoch(state.generationEpoch);
     if (wasPlaying && preservePlaying) {
       setPlaybackState("buffering");
       playNeuralFromChunk(state.currentIndex, targetWord);
@@ -3034,14 +3196,15 @@ elements.modelOptions?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-model-choice]");
   if (button && !button.disabled) selectModelChoice(button.dataset.modelChoice);
 });
-elements.naturalVoiceSelect.addEventListener("change", async () => {
+elements.naturalVoiceSelect.addEventListener("change", () => {
   const targetWord = currentWordPosition();
   const wasPlaying = state.playback === "playing";
   state.neuralVoice = elements.naturalVoiceSelect.value;
   localStorage.setItem(`${STORAGE_PREFIX}neural-voice`, state.neuralVoice);
   stopNeural(true);
-  await resetNeuralWorker(new Error("Voice changed."));
+  advanceGenerationEpoch();
   clearNeuralCache();
+  state.ttsBackend?.prefetchVoice(state.neuralVoice);
   updateEngineUI();
   if (wasPlaying && state.engine === "neural") {
     playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
@@ -3051,14 +3214,16 @@ if (elements.kittenVoiceSelect) {
   elements.kittenVoiceSelect.addEventListener("change", () => {
     const next = elements.kittenVoiceSelect.value;
     if (!KITTEN_VOICES.includes(next) || next === state.kittenVoice) return;
+    const targetWord = currentWordPosition();
+    const wasPlaying = state.playback === "playing";
     state.kittenVoice = next;
     localStorage.setItem(`${STORAGE_PREFIX}kitten-voice`, next);
-    // Voices share same model weights (style vectors) – no need to reset worker, just clear cache for new voice
+    stopNeural(true);
+    advanceGenerationEpoch();
     clearNeuralCache();
     updateEngineUI();
     showToast(`Kitten voice → ${next}`);
-    if (state.engine === "neural" && state.playback === "playing") {
-      const targetWord = currentWordPosition();
+    if (state.engine === "neural" && wasPlaying) {
       playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
     }
   });
@@ -3167,6 +3332,7 @@ elements.mediaAudio.addEventListener("pause", () => {
     !elements.mediaAudio.ended
   ) {
     setPlaybackState("paused");
+    state.ttsBackend?.cancelBackground(state.generationEpoch);
     savePosition();
   }
 });
@@ -3174,6 +3340,7 @@ elements.mediaAudio.addEventListener("pause", () => {
 elements.mediaAudio.addEventListener("play", () => {
   if (state.engine === "neural" && elements.mediaAudio.dataset.mode === "article" && state.playback !== "buffering") {
     setPlaybackState("playing");
+    resumeNeuralBuffering();
   }
 });
 

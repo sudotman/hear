@@ -66,7 +66,7 @@ class WorkerTtsBackend {
           this.callbacks.onGenerating?.(message);
           return;
         }
-        if (message.type === "audio" || message.type === "generation-error") {
+        if (message.type === "audio" || message.type === "generation-error" || message.type === "generation-cancelled") {
           this.finishRequest(message);
           return;
         }
@@ -103,6 +103,12 @@ class WorkerTtsBackend {
       request.reject(new Error(message.message || "This passage could not be generated."));
       return;
     }
+    if (message.type === "generation-cancelled") {
+      const error = new Error(message.message || "Background generation was cancelled.");
+      error.name = "BackgroundGenerationCancelled";
+      request.reject(error);
+      return;
+    }
     if (message.epoch !== request.epoch) {
       const error = new Error("Discarded audio from an earlier playback position.");
       error.name = "StaleGenerationError";
@@ -112,8 +118,20 @@ class WorkerTtsBackend {
     request.resolve({ buffer: message.buffer, duration: message.duration, metrics: message.metrics });
   }
 
-  async generate(text, { voice = this.config.defaultVoice, speed = 1, priority = 2, epoch = this.epoch, segmentKey = "" } = {}) {
+  async generate(text, {
+    voice = this.config.defaultVoice,
+    speed = 1,
+    priority = 2,
+    epoch = this.epoch,
+    segmentKey = "",
+    requestKey = "",
+  } = {}) {
     await this.load();
+    if (epoch !== this.epoch) {
+      const error = new Error("Discarded audio from an earlier playback position.");
+      error.name = "StaleGenerationError";
+      throw error;
+    }
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
@@ -123,9 +141,23 @@ class WorkerTtsBackend {
         error.name = "TimeoutError";
         reject(error);
       }, GENERATION_TIMEOUT_MS);
-      this.requests.set(id, { resolve, reject, timer, epoch });
-      this.worker.postMessage({ type: "generate", id, text, voice, speed, priority, epoch, segmentKey });
+      this.requests.set(id, { resolve, reject, timer, epoch, priority, requestKey });
+      this.worker.postMessage({ type: "generate", id, text, voice, speed, priority, epoch, segmentKey, requestKey });
     });
+  }
+
+  reprioritize(requestKey, priority, epoch = this.epoch) {
+    if (!requestKey || !this.worker) return;
+    this.worker.postMessage({ type: "reprioritize", requestKey, priority, epoch });
+  }
+
+  cancelBackground(epoch = this.epoch) {
+    this.worker?.postMessage({ type: "cancel-background", epoch, minimumPriority: 1 });
+  }
+
+  prefetchVoice(voice) {
+    if (!voice || !this.worker || !this.id.startsWith("kokoro-")) return;
+    this.worker.postMessage({ type: "prefetch-voice", voice });
   }
 
   async benchmark() {
@@ -135,6 +167,14 @@ class WorkerTtsBackend {
 
   setEpoch(epoch) {
     this.epoch = epoch;
+    for (const [id, request] of this.requests) {
+      if (request.epoch === epoch) continue;
+      window.clearTimeout(request.timer);
+      const error = new Error("Discarded audio from an earlier playback position.");
+      error.name = "StaleGenerationError";
+      request.reject(error);
+      this.requests.delete(id);
+    }
     this.worker?.postMessage({ type: "epoch", epoch });
   }
 
@@ -176,7 +216,7 @@ export class KokoroWebGPU extends WorkerTtsBackend {
       version: "1.0",
       device: "webgpu",
       dtype,
-      defaultVoice: "af_heart",
+      defaultVoice: opts.voice || "af_heart",
     }, callbacks);
   }
 }
@@ -192,7 +232,7 @@ export class KokoroWasm extends WorkerTtsBackend {
       version: "1.0",
       device: "wasm",
       dtype,
-      defaultVoice: "af_heart",
+      defaultVoice: opts.voice || "af_heart",
     }, callbacks);
   }
 }

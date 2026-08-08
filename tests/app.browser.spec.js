@@ -18,6 +18,34 @@ async function mockWikipedia(page) {
   }));
 }
 
+async function mockGutenbergBook(page) {
+  await page.route("https://gutendex.com/books/1727/", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: 1727,
+      title: "The Odyssey",
+      authors: [{ name: "Homer" }],
+      summaries: ["An ancient voyage home."],
+      languages: ["en"],
+      formats: {},
+    }),
+  }));
+  await page.route("https://api.github.com/search/repositories**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ items: [{ name: "Test_1727", full_name: "GITenberg/Test_1727", default_branch: "main" }] }),
+  }));
+  await page.route("https://api.github.com/repos/GITenberg/Test_1727/git/trees/main**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ tree: [{ type: "blob", path: "1727-h/1727-h.htm" }] }),
+  }));
+  await page.route("https://raw.githubusercontent.com/GITenberg/Test_1727/main/1727-h/1727-h.htm", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<h1>The Odyssey</h1><p>The first narrative passage is long enough to read aloud.</p>
+      <p>The second narrative passage continues the public-domain story.</p>
+      <p>The third narrative passage makes this a valid listening edition.</p>`,
+  }));
+}
+
 test.beforeEach(async ({ page }) => {
   const errors = [];
   browserErrors.set(page, errors);
@@ -37,7 +65,7 @@ test("keeps neural models idle until explicit download consent", async ({ page }
   const unrelatedCatalogRequests = [];
   page.on("request", (request) => {
     if (/huggingface|\.onnx(?:\?|$)|voices\.bin/i.test(request.url())) modelRequests.push(request.url());
-    if (/gutenberg\.org\/ebooks\/search\.opds/i.test(request.url())) unrelatedCatalogRequests.push(request.url());
+    if (/gutendex\.com\/books\/?(?:\?|$)/i.test(request.url())) unrelatedCatalogRequests.push(request.url());
   });
 
   await page.goto("/?lang=en&title=Test%20Work");
@@ -59,6 +87,20 @@ test("keeps neural models idle until explicit download consent", async ({ page }
   await expect(page.locator("#neural-download-model")).toContainText("Kitten");
   await expect(page.locator("#neural-download-size")).not.toHaveText("—");
   expect(modelRequests).toEqual([]);
+});
+
+test("opens a Gutenberg book without requesting browser-blocked OPDS metadata", async ({ page }) => {
+  const opdsRequests = [];
+  page.on("request", (request) => {
+    if (/gutenberg\.org\/ebooks\/\d+\.opds/i.test(request.url())) opdsRequests.push(request.url());
+  });
+  await mockGutenbergBook(page);
+
+  await page.goto("/?source=gutenberg&book=1727");
+
+  await expect(page.getByRole("heading", { name: "The Odyssey", level: 1 })).toBeVisible();
+  await expect(page.locator("#source-link")).toHaveAttribute("href", "https://www.gutenberg.org/ebooks/1727");
+  expect(opdsRequests).toEqual([]);
 });
 
 test("browser Back restores the reader after visiting the library", async ({ page }) => {

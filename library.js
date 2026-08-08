@@ -2,6 +2,7 @@ import { fetchWithTimeout } from "./fetch-utils.js";
 
 const STANDARD_ORIGIN = "https://standardebooks.org";
 const GUTENBERG_ORIGIN = "https://www.gutenberg.org";
+const GUTENDEX_ORIGIN = "https://gutendex.com";
 const WORK_CACHE = "hear-work-cache";
 const WORK_STORE = "works";
 const CACHE_VERSION = 6;
@@ -117,30 +118,23 @@ function parseStandardEntries(text) {
   }).filter((item) => item.downloadUrl);
 }
 
-function parseGutenbergSearchEntries(text) {
-  const document = xmlDocument(text);
-  const seen = new Set();
-  return localElements(document, "entry").flatMap((entry) => {
-    const idText = nodeText(directLocalElement(entry, "id"));
-    const match = idText.match(/\/ebooks\/(\d+)\.opds(?:$|\?)/);
-    if (!match || seen.has(match[1])) return [];
-    seen.add(match[1]);
-    const id = match[1];
-    return [{
-      id: `gutenberg:${id}`,
-      gutenbergId: id,
-      source: "gutenberg",
-      sourceLabel: "Project Gutenberg",
-      title: nodeText(directLocalElement(entry, "title"), "Untitled"),
-      author: nodeText(directLocalElement(entry, "content"), "Project Gutenberg"),
-      description: "A public-domain edition from Project Gutenberg.",
-      image: "",
-      sourceUrl: `${GUTENBERG_ORIGIN}/ebooks/${id}`,
-      downloadUrl: "",
-      categories: [],
-      language: "en",
-    }];
-  });
+export function gutenbergItemFromGutendex(book) {
+  const id = String(book?.id || "");
+  const authors = (book?.authors || []).map((author) => humanAuthorName(author.name)).filter(Boolean);
+  return {
+    id: `gutenberg:${id}`,
+    gutenbergId: id,
+    source: "gutenberg",
+    sourceLabel: "Project Gutenberg",
+    title: cleanPublicationText(book?.title) || `Project Gutenberg #${id}`,
+    author: authors.join(", ") || "Project Gutenberg",
+    description: cleanPublicationText(book?.summaries?.[0]) || "A public-domain edition from Project Gutenberg.",
+    image: book?.formats?.["image/jpeg"] || "",
+    sourceUrl: `${GUTENBERG_ORIGIN}/ebooks/${id}`,
+    downloadUrl: "",
+    categories: [...(book?.bookshelves || []), ...(book?.subjects || [])],
+    language: book?.languages?.[0] || "en",
+  };
 }
 
 export async function fetchStandardCatalog({ query = "", page = 1, limit = 18, signal } = {}) {
@@ -172,13 +166,13 @@ export async function fetchStandardCatalog({ query = "", page = 1, limit = 18, s
 }
 
 export async function fetchGutenbergCatalog({ query = "", page = 1, signal } = {}) {
-  const url = new URL("/ebooks/search.opds/", GUTENBERG_ORIGIN);
-  if (query.trim()) url.searchParams.set("query", query.trim());
-  else url.searchParams.set("sort_order", "downloads");
-  if (page > 1) url.searchParams.set("start_index", String((page - 1) * 25 + 1));
-  const response = await fetchWithTimeout(url, { headers: { Accept: "application/atom+xml" }, signal });
-  if (!response.ok) throw new Error("Project Gutenberg did not respond.");
-  return parseGutenbergSearchEntries(await response.text());
+  const url = new URL("/books/", GUTENDEX_ORIGIN);
+  if (query.trim()) url.searchParams.set("search", query.trim());
+  url.searchParams.set("page", String(Math.max(1, page)));
+  const response = await fetchWithTimeout(url, { signal });
+  if (!response.ok) throw new Error("The Project Gutenberg catalog did not respond.");
+  const payload = await response.json();
+  return (payload.results || []).map(gutenbergItemFromGutendex).filter((item) => item.gutenbergId);
 }
 
 export async function fetchStandardItemFromSlug(slug, { signal } = {}) {
@@ -415,13 +409,6 @@ export function parseEpubFiles(files, options = {}) {
   };
 }
 
-function gutenbergSummary(entry) {
-  const content = directLocalElement(entry, "content");
-  const value = nodeText(content);
-  const summary = value.match(/Summary:\s*(.+?)(?:\s*Reading Level:|\s*Author:)/i)?.[1];
-  return cleanPublicationText(summary || "A public-domain edition from Project Gutenberg.");
-}
-
 function humanAuthorName(value) {
   const text = cleanPublicationText(value).replace(/,?\s+\d{4}[-–]\d{0,4}\.?$/, "");
   const match = text.match(/^([^,]+),\s*([^,]+)$/);
@@ -429,23 +416,14 @@ function humanAuthorName(value) {
 }
 
 async function fetchGutenbergDetails(id, { signal } = {}) {
-  const response = await fetchWithTimeout(`${GUTENBERG_ORIGIN}/ebooks/${id}.opds`, {
-    headers: { Accept: "application/atom+xml" },
-    signal,
-  });
-  if (!response.ok) throw new Error("Project Gutenberg could not open that edition.");
-  const document = xmlDocument(await response.text());
-  const entries = localElements(document, "entry");
-  const entry = entries.find((candidate) => localElements(candidate, "link").some((link) => (
-    link.getAttribute("type") === "application/epub+zip" && /no images/i.test(link.getAttribute("title") || "")
-  ))) || entries[0];
-  if (!entry) throw new Error("Project Gutenberg did not return book metadata.");
-  const author = directLocalElement(entry, "author");
+  const response = await fetchWithTimeout(`${GUTENDEX_ORIGIN}/books/${id}/`, { signal });
+  if (!response.ok) throw new Error("The Project Gutenberg catalog could not open that edition.");
+  const item = gutenbergItemFromGutendex(await response.json());
   return {
-    title: nodeText(directLocalElement(entry, "title"), `Project Gutenberg #${id}`),
-    author: humanAuthorName(nodeText(directLocalElement(author, "name"), "Unknown author")),
-    description: gutenbergSummary(entry),
-    lang: nodeText(localElement(entry, "language"), "en"),
+    title: item.title,
+    author: item.author,
+    description: item.description,
+    lang: item.language,
   };
 }
 
@@ -591,19 +569,24 @@ async function fetchGitenbergContent(id, { signal } = {}) {
 
 export async function loadGutenbergWork(item, onStatus = () => {}, { signal } = {}) {
   const id = item.gutenbergId || String(item.id).replace(/^gutenberg:/, "");
-  onStatus("Reading Project Gutenberg metadata");
-  const details = await fetchGutenbergDetails(id, { signal });
-  onStatus("Opening the public-domain text mirror");
-  const blocks = await fetchGitenbergContent(id, { signal });
+  onStatus("Opening the public-domain edition");
+  const [details, blocks] = await Promise.all([
+    fetchGutenbergDetails(id, { signal }).catch((error) => {
+      if (signal?.aborted) throw error;
+      console.warn("[Hear library] Gutenberg metadata unavailable; opening the mirrored text", error);
+      return null;
+    }),
+    fetchGitenbergContent(id, { signal }),
+  ]);
   const proseCount = blocks.filter((block) => block.type === "p" || block.type === "li").length;
   if (proseCount < 3) throw new Error("This Gutenberg edition does not contain enough readable text.");
   return {
     key: `gutenberg:${id}`,
     kind: "book",
-    lang: details.lang || item.language || "en",
-    title: details.title || item.title,
-    author: details.author || item.author,
-    description: details.description || item.description,
+    lang: details?.lang || item.language || "en",
+    title: details?.title || item.title,
+    author: details?.author || item.author,
+    description: details?.description || item.description,
     image: "",
     source: "gutenberg",
     sourceLabel: "Project Gutenberg",

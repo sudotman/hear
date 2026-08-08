@@ -12,6 +12,43 @@ let activeEpoch = 0;
 let processing = false;
 const queue = [];
 const downloadProgress = new Map();
+const kokoroVoicePrefetches = new Map();
+
+async function downloadKokoroVoice(model, voice) {
+  if (!voice || typeof caches === "undefined") return;
+  const url = `https://huggingface.co/${model}/resolve/main/voices/${voice}.bin`;
+  const file = `voices/${voice}.bin`;
+  let cache;
+  try {
+    cache = await caches.open("kokoro-voices");
+  } catch {
+    return;
+  }
+  const cached = await cache.match(url);
+  if (cached) {
+    const size = Number(cached.headers.get("content-length")) || 0;
+    postProgress({ status: "cached", file, loaded: size, total: size, progress: 100, cached: true });
+    return;
+  }
+  postProgress({ status: "progress", file, loaded: 0, total: 0, progress: 0 });
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not download Kokoro voice ${voice} (${response.status}).`);
+  const buffer = await response.arrayBuffer();
+  const headers = new Headers(response.headers);
+  if (!headers.has("content-length")) headers.set("content-length", String(buffer.byteLength));
+  await cache.put(url, new Response(buffer, { headers })).catch(() => {});
+  postProgress({ status: "progress", file, loaded: buffer.byteLength, total: buffer.byteLength, progress: 100 });
+}
+
+function prefetchKokoroVoice(model, voice) {
+  const key = `${model}:${voice}`;
+  if (kokoroVoicePrefetches.has(key)) return kokoroVoicePrefetches.get(key);
+  const pending = downloadKokoroVoice(model, voice).finally(() => {
+    if (kokoroVoicePrefetches.get(key) === pending) kokoroVoicePrefetches.delete(key);
+  });
+  kokoroVoicePrefetches.set(key, pending);
+  return pending;
+}
 
 function postProgress(progress) {
   const fileProgress = Number.isFinite(progress.progress)
@@ -83,11 +120,16 @@ async function initialize(config = backend) {
       await runtime.load();
     } else {
       const { KokoroTTS } = await import("kokoro-js");
-      runtime = await KokoroTTS.from_pretrained(backend.model, {
+      const runtimePromise = KokoroTTS.from_pretrained(backend.model, {
         dtype: backend.dtype,
         device: backend.device,
         progress_callback: postProgress,
       });
+      const voicePromise = prefetchKokoroVoice(backend.model, backend.defaultVoice).catch((error) => {
+        console.warn("[Hear TTS] could not prefetch Kokoro voice", error);
+      });
+      const [loadedRuntime] = await Promise.all([runtimePromise, voicePromise]);
+      runtime = loadedRuntime;
     }
     self.postMessage({
       type: "ready",
@@ -132,6 +174,7 @@ async function generate(job) {
       buffer = encodeWav(output.audio, output.samplingRate);
     } else {
       postStage("synthesize");
+      await prefetchKokoroVoice(backend.model, job.voice);
       const output = await model.generate(job.text, { voice: job.voice, speed: job.speed });
       duration = output.audio.length / output.sampling_rate;
       postStage("encoding");
@@ -201,6 +244,36 @@ self.addEventListener("message", (event) => {
     activeEpoch = message.epoch;
     for (let index = queue.length - 1; index >= 0; index -= 1) {
       if (queue[index].epoch !== activeEpoch) queue.splice(index, 1);
+    }
+    return;
+  }
+  if (message.type === "reprioritize") {
+    const job = queue.find((candidate) => (
+      candidate.epoch === message.epoch && candidate.requestKey === message.requestKey
+    ));
+    if (job) job.priority = Math.min(job.priority, message.priority ?? job.priority);
+    return;
+  }
+  if (message.type === "cancel-background") {
+    const minimumPriority = message.minimumPriority ?? 1;
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      const job = queue[index];
+      if (job.epoch !== message.epoch || job.priority < minimumPriority) continue;
+      queue.splice(index, 1);
+      self.postMessage({
+        type: "generation-cancelled",
+        id: job.id,
+        epoch: job.epoch,
+        message: "Background generation was cancelled while playback was paused.",
+      });
+    }
+    return;
+  }
+  if (message.type === "prefetch-voice") {
+    if (backend?.id?.startsWith("kokoro-")) {
+      prefetchKokoroVoice(backend.model, message.voice).catch((error) => {
+        console.warn("[Hear TTS] could not prefetch Kokoro voice", error);
+      });
     }
     return;
   }

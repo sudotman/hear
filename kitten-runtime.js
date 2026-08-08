@@ -177,13 +177,18 @@ async function fetchWithProgress(url, onProgress, fileLabel = "onnx/model.onnx")
     return buf;
   }
   const reader = response.body.getReader();
-  const chunks = [];
+  let joined = new Uint8Array(total || 1024 * 1024);
   let loaded = 0;
   let lastReport = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    if (loaded + value.length > joined.length) {
+      const expanded = new Uint8Array(Math.max(loaded + value.length, joined.length * 2));
+      expanded.set(joined.subarray(0, loaded));
+      joined = expanded;
+    }
+    joined.set(value, loaded);
     loaded += value.length;
     const now = performance.now();
     if (now - lastReport >= 80) {
@@ -191,17 +196,12 @@ async function fetchWithProgress(url, onProgress, fileLabel = "onnx/model.onnx")
       onProgress?.({ status: "progress", file: fileLabel, loaded, total, progress: total ? (loaded / total) * 100 : null });
     }
   }
-  const joined = new Uint8Array(loaded);
-  let offset = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, offset);
-    offset += chunk.length;
-  }
+  const buffer = loaded === joined.byteLength ? joined.buffer : joined.buffer.slice(0, loaded);
   // Persist for next load before reporting final progress
-  putCachedBuffer(url, joined.buffer, response.headers).catch(() => {});
+  putCachedBuffer(url, buffer, response.headers).catch(() => {});
   // Ensure final 100% is reported
   onProgress?.({ status: "progress", file: fileLabel, loaded, total: loaded, progress: 100 });
-  return joined.buffer;
+  return buffer;
 }
 
 export class KittenRuntime {

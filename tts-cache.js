@@ -5,6 +5,8 @@ const DB_VERSION = 2;
 const STORE_NAME = "segments";
 
 let databasePromise;
+let audioWriteQueue = Promise.resolve();
+let writesUntilPrune = 0;
 
 function openDatabase() {
   if (!databasePromise) {
@@ -107,17 +109,28 @@ export async function putCachedAudio({ key, blob, duration, createdAt = Date.now
   // getCachedAudio recreates the local WAV Blob when reading it back.
   const buffer = await blob.arrayBuffer();
   const entry = { key, buffer, type: blob.type || "audio/wav", duration, createdAt, lastAccessed: createdAt, size: buffer.byteLength };
-  try {
-    await putAudioEntry(entry);
-  } catch (error) {
-    if (error?.name !== "QuotaExceededError") throw error;
-    await pruneAudioCache(RETRY_AUDIO_CACHE_BYTES);
-    await putAudioEntry(entry);
-  }
-  await pruneAudioCache();
+  const write = async () => {
+    try {
+      await putAudioEntry(entry);
+    } catch (error) {
+      if (error?.name !== "QuotaExceededError") throw error;
+      await pruneAudioCache(RETRY_AUDIO_CACHE_BYTES);
+      await putAudioEntry(entry);
+    }
+    // Lookahead can finish many short passages close together. Pruning every
+    // write makes Safari repeatedly materialize the full object store, so do
+    // it once per small batch while keeping the first write of a session safe.
+    if (writesUntilPrune === 0) await pruneAudioCache();
+    writesUntilPrune = (writesUntilPrune + 1) % 8;
+  };
+  const pending = audioWriteQueue.then(write, write);
+  audioWriteQueue = pending.catch(() => {});
+  return pending;
 }
 
 export async function clearTtsCache() {
+  await audioWriteQueue;
+  writesUntilPrune = 0;
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const done = transactionDone(transaction);
@@ -126,6 +139,8 @@ export async function clearTtsCache() {
 }
 
 export async function deleteTtsDatabase() {
+  await audioWriteQueue;
+  writesUntilPrune = 0;
   if (databasePromise) {
     try {
       const db = await databasePromise;
