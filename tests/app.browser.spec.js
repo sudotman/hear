@@ -3,6 +3,10 @@ import { expect, test } from "@playwright/test";
 const browserErrors = new WeakMap();
 
 async function mockWikipedia(page) {
+  const imageBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
   await page.route("**/w/rest.php/v1/page/**/html", (route) => route.fulfill({
     contentType: "text/html",
     body: `<section data-mw-section-id="0"><p>A short opening paragraph suitable for listening.</p></section>
@@ -13,8 +17,17 @@ async function mockWikipedia(page) {
     body: JSON.stringify({
       title: "Test Work",
       description: "A local browser-test fixture",
+      thumbnail: {
+        source: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Test_Work.jpg/320px-Test_Work.jpg",
+        width: 320,
+        height: 240,
+      },
       content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Test_Work" } },
     }),
+  }));
+  await page.route("https://upload.wikimedia.org/**", (route) => route.fulfill({
+    contentType: "image/png",
+    body: imageBytes,
   }));
 }
 
@@ -79,6 +92,8 @@ test("keeps neural models idle until explicit download consent", async ({ page }
   await page.goto("/?lang=en&title=Test%20Work");
   await expect(page.getByRole("heading", { name: "Test Work", level: 1 })).toBeVisible();
   await expect(page.locator("#active-model-label")).toContainText("System voice");
+  await expect(page.locator("#article-image")).toBeVisible();
+  await expect(page.locator("#article-image")).toHaveAttribute("src", /^https:\/\/upload\.wikimedia\.org\//);
   expect(modelRequests).toEqual([]);
   expect(unrelatedCatalogRequests).toEqual([]);
 
@@ -92,9 +107,48 @@ test("keeps neural models idle until explicit download consent", async ({ page }
 
   await page.locator("#preview-voice").click();
   await expect(page.locator("#neural-sheet")).toBeVisible();
+  await expect(page.locator("#voice-sheet")).not.toHaveAttribute("open", "");
   await expect(page.locator("#neural-download-model")).toContainText("Kitten");
   await expect(page.locator("#neural-download-size")).not.toHaveText("—");
   expect(modelRequests).toEqual([]);
+});
+
+test("offers a return to the current passage after scrolling away", async ({ page }) => {
+  await page.addInitScript(() => {
+    class TestUtterance {
+      constructor(text) {
+        this.text = text;
+      }
+    }
+    const speech = {
+      paused: false,
+      cancel() {},
+      pause() { this.paused = true; },
+      resume() { this.paused = false; },
+      getVoices() { return []; },
+      speak(utterance) { setTimeout(() => utterance.onstart?.(), 0); },
+      addEventListener() {},
+    };
+    Object.defineProperty(window, "SpeechSynthesisUtterance", { configurable: true, value: TestUtterance });
+    Object.defineProperty(window, "speechSynthesis", { configurable: true, value: speech });
+  });
+
+  await page.goto("/?lang=en&title=Test%20Work");
+  await page.locator("#seek-range").evaluate((range) => {
+    range.value = "350";
+    range.dispatchEvent(new Event("input", { bubbles: true }));
+    range.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.locator("#reader footer").scrollIntoViewIfNeeded();
+  await page.locator("#play-button").click();
+
+  await expect(page.locator("#jump-to-current")).toBeVisible();
+  await page.locator("#jump-to-current").click();
+  await expect(page.locator("#jump-to-current")).toBeHidden();
+  await expect.poll(() => page.locator("#article-copy .is-speaking").evaluate((block) => {
+    const rect = block.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= window.innerHeight;
+  })).toBe(true);
 });
 
 test("opens a Gutenberg book without requesting browser-blocked OPDS metadata", async ({ page }) => {

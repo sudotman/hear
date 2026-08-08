@@ -28,6 +28,7 @@ import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, 
 import { selectLookaheadSegmentIndices, selectNeuralCacheEvictions, shareInFlight } from "./tts-scheduling.js";
 import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
 import { coverProxyPath } from "./cover-policy.js";
+import { segmentNarrationSentences } from "./narration-text.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -83,6 +84,7 @@ const elements = {
   imageCaption: $("#image-caption"),
   heroPlay: $("#hero-play"),
   restartButton: $("#restart-button"),
+  jumpToCurrent: $("#jump-to-current"),
   player: $("#player"),
   nowPlayingButton: $("#now-playing-button"),
   mediaAudio: $("#media-audio"),
@@ -348,6 +350,8 @@ const state = {
   lastAnnouncement: "",
   lastAnnouncementAt: 0,
   chapters: [],
+  jumpReturnTimer: null,
+  jumpVisibilityFrame: null,
 };
 
 function readStoredJson(key, fallback) {
@@ -411,6 +415,9 @@ function displayImageSource(item) {
   try {
     const url = new URL(image, location.href);
     if (url.protocol === "data:" || url.protocol === "blob:" || url.origin === location.origin) return url.href;
+    // Wikimedia serves images with CORS enabled, while Wikimedia rejects the
+    // Cloudflare image proxy. Loading it directly also remains valid under COEP.
+    if (url.hostname === "upload.wikimedia.org") return url.href;
     const proxyPath = coverProxyPath(url.href);
     if (proxyPath) return new URL(proxyPath, location.origin).href;
     return crossOriginIsolated ? "" : url.href;
@@ -666,6 +673,7 @@ function showLibraryView({ scrollTop = true } = {}) {
   elements.shareButton.hidden = true;
   elements.siteHeader.dataset.condensed = state.article ? "true" : "false";
   document.body.classList.add("library-open");
+  elements.jumpToCurrent.hidden = true;
   document.title = "Hear — the written world, spoken";
   if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
   updateContinueListening();
@@ -683,6 +691,7 @@ function showReaderView({ scrollTop = true } = {}) {
   document.body.classList.remove("library-open");
   document.title = `${state.article.title} — Hear`;
   if (scrollTop) window.scrollTo({ top: 0, behavior: "instant" });
+  queueJumpToCurrentVisibility();
 }
 
 function navigateToLibrary({ historyMode = "push", scrollTop = true } = {}) {
@@ -826,48 +835,6 @@ function normalizedHeading(value) {
 
 function wordCount(text) {
   return text.match(/[\p{L}\p{N}]+(?:[’'-][\p{L}\p{N}]+)*/gu)?.length || 1;
-}
-
-function splitLongText(text, maxLength = 320) {
-  if (text.length <= maxLength) return [text];
-
-  const pieces = [];
-  let remainder = text;
-
-  while (remainder.length > maxLength) {
-    const window = remainder.slice(0, maxLength + 1);
-    const breakAt = Math.max(
-      window.lastIndexOf("; "),
-      window.lastIndexOf(": "),
-      window.lastIndexOf(", "),
-      window.lastIndexOf(" "),
-    );
-    const index = breakAt > maxLength * 0.55 ? breakAt + 1 : maxLength;
-    pieces.push(remainder.slice(0, index).trim());
-    remainder = remainder.slice(index).trim();
-  }
-
-  if (remainder) pieces.push(remainder);
-  return pieces;
-}
-
-function segmentSentences(text, lang) {
-  let sentences;
-
-  if ("Segmenter" in Intl) {
-    try {
-      const segmenter = new Intl.Segmenter(lang, { granularity: "sentence" });
-      sentences = [...segmenter.segment(text)].map(({ segment }) => segment.trim()).filter(Boolean);
-    } catch {
-      sentences = null;
-    }
-  }
-
-  if (!sentences?.length) {
-    sentences = text.match(/[^.!?]+(?:[.!?]+[”’"']?|$)/g)?.map((item) => item.trim()).filter(Boolean) || [text];
-  }
-
-  return sentences.flatMap((sentence) => splitLongText(sentence));
 }
 
 function parseArticleInput(rawInput) {
@@ -1099,7 +1066,7 @@ function createSpeechChunks(article) {
       if (pieceIndex < linePieces.length - 1 && !/[.!?;:,…—]$/.test(piece)) {
         piece = `${piece} .`;
       }
-      const sentences = segmentSentences(piece, article.lang);
+      const sentences = segmentNarrationSentences(piece, article.lang);
       for (let s = 0; s < sentences.length; s += 1) {
         const isFirstSentenceOfPiece = s === 0;
         addChunk(sentences[s], block, isLineBreakPiece && isFirstSentenceOfPiece ? { lineBreak: true } : {});
@@ -1774,7 +1741,7 @@ function setNeuralLoading(progress = null, detail = "Loading the natural voice")
 }
 
 function setLoadingIsolation(active) {
-  [elements.siteHeader, $("main"), elements.player, ...$$("dialog")].forEach((element) => {
+  [elements.siteHeader, $("main"), elements.jumpToCurrent, elements.player, ...$$("dialog")].forEach((element) => {
     if (element) element.inert = active;
   });
   if (active) requestAnimationFrame(() => elements.loadingCancel.focus({ preventScroll: true }));
@@ -2306,9 +2273,11 @@ function requestNeuralAction(action) {
   if (state.neuralReady || localStorage.getItem(neuralConsentKey()) === "true") {
     unlockMediaAudio();
     state.pendingNeuralAction = null;
+    if (elements.voiceSheet.open) elements.voiceSheet.close();
     action();
     return;
   }
+  if (elements.voiceSheet.open) elements.voiceSheet.close();
   updateNeuralDownloadSheet();
   elements.neuralSheet.showModal();
 }
@@ -2527,6 +2496,7 @@ function setPlaybackState(nextState, detail = "") {
         : "none";
     elements.mediaAudio.dataset.mediaSessionPlaybackState = navigator.mediaSession.playbackState;
   }
+  queueJumpToCurrentVisibility();
 }
 
 function applyVoiceToUtterance(utterance) {
@@ -2751,6 +2721,42 @@ function updateActiveBlock(chunk) {
       }
     }
   }
+  queueJumpToCurrentVisibility();
+}
+
+function updateJumpToCurrentVisibility() {
+  state.jumpVisibilityFrame = null;
+  const block = state.activeBlockId ? document.getElementById(state.activeBlockId) : null;
+  const hasCurrentPassage = state.playback === "playing" || state.playback === "paused";
+  if (!block || !hasCurrentPassage || elements.reader.hidden || state.jumpReturnTimer) {
+    elements.jumpToCurrent.hidden = true;
+    return;
+  }
+
+  const blockRect = block.getBoundingClientRect();
+  const headerBottom = Math.max(0, elements.siteHeader?.getBoundingClientRect().bottom || 0);
+  const playerTop = elements.player.hidden ? window.innerHeight : elements.player.getBoundingClientRect().top;
+  const visibleTop = headerBottom + 12;
+  const visibleBottom = Math.min(window.innerHeight, playerTop) - 12;
+  elements.jumpToCurrent.hidden = blockRect.bottom > visibleTop && blockRect.top < visibleBottom;
+}
+
+function queueJumpToCurrentVisibility() {
+  if (state.jumpVisibilityFrame !== null) return;
+  state.jumpVisibilityFrame = requestAnimationFrame(updateJumpToCurrentVisibility);
+}
+
+function jumpToCurrentPassage() {
+  const block = state.activeBlockId ? document.getElementById(state.activeBlockId) : null;
+  if (!block) return;
+  elements.jumpToCurrent.hidden = true;
+  window.clearTimeout(state.jumpReturnTimer);
+  state.jumpReturnTimer = window.setTimeout(() => {
+    state.jumpReturnTimer = null;
+    queueJumpToCurrentVisibility();
+  }, 700);
+  block.scrollIntoView({ behavior: "smooth", block: "center" });
+  announcePlayerStatus("Returned to the current passage.", { force: true });
 }
 
 function updateProgress(previewWord = null) {
@@ -2920,6 +2926,7 @@ function activateWork(work, { historyMode = "push" } = {}) {
   state.currentSegmentIndex = 0;
   state.boundaryWords = 0;
   state.activeBlockId = null;
+  elements.jumpToCurrent.hidden = true;
   renderArticle(work);
   loadVoices();
   restorePosition();
@@ -2986,8 +2993,17 @@ function setBookmarklet() {
 function updateMediaMetadata() {
   if (!("mediaSession" in navigator) || !("MediaMetadata" in window) || !state.article) return;
   const artworkSource = displayImageSource(state.article);
-  const artwork = artworkSource
-    ? [{ src: artworkSource }]
+  let metadataArtworkSource = artworkSource;
+  try {
+    const artworkUrl = new URL(artworkSource, location.href);
+    // Media Session does not expose a CORS mode for artwork. WebKit blocks
+    // cross-origin artwork under COEP even though the visible <img> uses CORS.
+    if (crossOriginIsolated && artworkUrl.origin !== location.origin) metadataArtworkSource = "";
+  } catch {
+    metadataArtworkSource = "";
+  }
+  const artwork = metadataArtworkSource
+    ? [{ src: metadataArtworkSource }]
     : [];
   navigator.mediaSession.metadata = new MediaMetadata({
     title: state.article.title,
@@ -3201,6 +3217,9 @@ elements.restartButton.addEventListener("click", () => {
 });
 elements.backButton.addEventListener("click", () => skipSeconds(-15));
 elements.forwardButton.addEventListener("click", () => skipSeconds(15));
+elements.jumpToCurrent.addEventListener("click", jumpToCurrentPassage);
+window.addEventListener("scroll", queueJumpToCurrentVisibility, { passive: true });
+window.addEventListener("resize", queueJumpToCurrentVisibility, { passive: true });
 
 elements.seekRange.addEventListener("input", () => {
   state.isSeeking = true;
@@ -3306,6 +3325,7 @@ elements.downloadNeural.addEventListener("click", () => {
   state.pendingNeuralAction = null;
   localStorage.setItem(neuralConsentKey(), "true");
   unlockMediaAudio();
+  if (elements.voiceSheet.open) elements.voiceSheet.close();
   elements.neuralSheet.close();
   action?.();
 });
