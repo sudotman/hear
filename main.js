@@ -14,6 +14,7 @@ import {
   KITTEN_VOICES,
   KOKORO_DTYPES,
   KOKORO_MODEL,
+  SPEECH_MODEL_CHOICES,
   formatMegabytes,
   getModelDownloadDetails,
 } from "./app-config.js";
@@ -106,25 +107,11 @@ const elements = {
   voiceTraits: $("#voice-traits"),
   naturalVoiceRow: $("#natural-voice-row"),
   systemVoiceRow: $("#system-voice-row"),
-  kokoroEngine: $("#kokoro-engine"),
-  kittenEngine: $("#kitten-engine"),
-  systemEngine: $("#system-engine"),
+  modelOptions: $("#model-options"),
   engineDescription: $("#engine-description"),
-  kokoroDeviceSelect: $("#kokoro-device-select"),
-  kokoroDeviceRow: $("#kokoro-device-row"),
-  kokoroDeviceNote: $("#kokoro-device-note"),
-  kokoroDtypeSelect: $("#kokoro-dtype-select"),
-  kokoroDtypeRow: $("#kokoro-dtype-row"),
-  kokoroDtypeNote: $("#kokoro-dtype-note"),
-  kittenModelSelect: $("#kitten-model-select"),
-  kittenModelRow: $("#kitten-model-row"),
-  kittenModelNote: $("#kitten-model-note"),
   kittenVoiceSelect: $("#kitten-voice-select"),
   kittenVoiceRow: $("#kitten-voice-row"),
   kittenVoiceTraits: $("#kitten-voice-traits"),
-  kittenDtypeSelect: $("#kitten-dtype-select"),
-  kittenDtypeRow: $("#kitten-dtype-row"),
-  kittenDtypeNote: $("#kitten-dtype-note"),
   activeModelLabel: $("#active-model-label"),
   clearAudioCache: $("#clear-audio-cache"),
   clearAllData: $("#clear-all-data"),
@@ -644,6 +631,7 @@ function showLibraryView({ scrollTop = true } = {}) {
   document.title = "Hear — the written world, spoken";
   if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
   updateContinueListening();
+  if (!state.catalogItems.length && !state.catalogAbortController) loadCatalog();
 }
 
 function showReaderView({ scrollTop = true } = {}) {
@@ -1414,51 +1402,79 @@ function naturalVoiceAvailable() {
   return state.article?.lang?.toLowerCase().startsWith("en");
 }
 
+function selectedModelChoiceId() {
+  if (state.backendPreference === "system") return "system";
+  if (state.backendPreference === "kitten") return `kitten:${state.kittenModel}`;
+  const dtype = state.kokoroDevice === "webgpu" ? "fp32" : state.kokoroDtype;
+  return `kokoro:${state.kokoroDevice}:${dtype}`;
+}
+
+function renderModelChoices() {
+  if (!elements.modelOptions || elements.modelOptions.childElementCount) return;
+  let currentGroup = "";
+  const fragment = document.createDocumentFragment();
+  for (const choice of SPEECH_MODEL_CHOICES) {
+    if (choice.group !== currentGroup) {
+      currentGroup = choice.group;
+      const heading = document.createElement("p");
+      heading.className = "model-group-label";
+      heading.textContent = currentGroup;
+      fragment.append(heading);
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "model-option";
+    button.dataset.modelChoice = choice.id;
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-checked", "false");
+
+    const marker = document.createElement("span");
+    marker.className = "model-option-marker";
+    marker.setAttribute("aria-hidden", "true");
+    const copy = document.createElement("span");
+    copy.className = "model-option-copy";
+    const name = document.createElement("strong");
+    name.textContent = choice.name;
+    const detail = document.createElement("small");
+    detail.textContent = choice.detail;
+    const repository = document.createElement("small");
+    repository.className = "model-repository";
+    repository.textContent = choice.repository;
+    repository.title = choice.repository;
+    copy.append(name, detail, repository);
+
+    const facts = document.createElement("span");
+    facts.className = "model-option-facts";
+    const size = document.createElement("strong");
+    size.textContent = choice.sizeMb ? `${choice.estimated ? "~" : ""}${formatMegabytes(choice.sizeMb)}` : "No download";
+    const runtime = document.createElement("small");
+    runtime.textContent = choice.backend === "system" ? "Native" : `${choice.dtype} · ${choice.device.toUpperCase()}`;
+    const availability = document.createElement("small");
+    availability.className = "model-availability";
+    facts.append(size, runtime, availability);
+    button.append(marker, copy, facts);
+    fragment.append(button);
+  }
+  elements.modelOptions.append(fragment);
+}
+
 function updateEngineUI() {
   if (!naturalVoiceAvailable() && state.engine === "neural") {
     state.engine = "system";
     state.backendPreference = "system";
   }
   const isNeural = state.engine === "neural";
-  // Explicit device/dtype selectors – both engines now fully explicit.
-  const showKokoro = state.backendPreference === "kokoro";
-  const showKitten = state.backendPreference === "kitten";
-  if (elements.kokoroDeviceRow) {
-    elements.kokoroDeviceRow.hidden = !showKokoro;
-    if (elements.kokoroDeviceSelect) {
-      elements.kokoroDeviceSelect.value = state.kokoroDevice;
-      const webgpuOpt = elements.kokoroDeviceSelect.querySelector('option[value="webgpu"]');
-      if (webgpuOpt) {
-        webgpuOpt.disabled = !supportsWebGPU();
-        webgpuOpt.textContent = supportsWebGPU() ? "WebGPU · experimental (fp32)" : "WebGPU · not supported";
-      }
-    }
-    if (elements.kokoroDeviceNote) {
-      const devLabel = state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM";
-      let note = `Compute: ${devLabel} · saved as hearwiki:kokoro-device.`;
-      if (IS_ANDROID && state.kokoroDevice === "webgpu") note += " WebGPU often crashes on Android – WASM recommended.";
-      if (!supportsWebGPU() && state.kokoroDevice === "webgpu") note += " WebGPU not detected; will fallback to WASM.";
-      elements.kokoroDeviceNote.textContent = note;
-    }
-    if (elements.kokoroDeviceSelect) elements.kokoroDeviceSelect.disabled = false;
-  }
-  if (elements.kokoroDtypeRow) {
-    elements.kokoroDtypeRow.hidden = !showKokoro;
-    if (elements.kokoroDtypeSelect) elements.kokoroDtypeSelect.value = state.kokoroDtype;
-    if (elements.kokoroDtypeNote) {
-      const details = getModelDownloadDetails({ backend: "kokoro", kokoroDevice: state.kokoroDevice, kokoroDtype: state.kokoroDtype });
-      elements.kokoroDtypeNote.textContent = `${KOKORO_MODEL} · ${details.label} · ${formatMegabytes(details.sizeMb)} · saved on this device.`;
-    }
-  }
-  if (elements.kittenModelRow) {
-    elements.kittenModelRow.hidden = !showKitten;
-    if (elements.kittenModelSelect) elements.kittenModelSelect.value = state.kittenModel;
-    if (elements.kittenModelNote) elements.kittenModelNote.textContent = `${state.kittenModel} · WASM-only · experiment freely.`;
-  }
-  if (elements.kittenDtypeRow) {
-    elements.kittenDtypeRow.hidden = !showKitten;
-    if (elements.kittenDtypeSelect) elements.kittenDtypeSelect.value = state.kittenDtype;
-    if (elements.kittenDtypeNote) elements.kittenDtypeNote.textContent = `Kitten dtype ${state.kittenDtype} · saved as hearwiki:kitten-dtype. Model=${state.kittenModel.split("/").pop()}.`;
+  renderModelChoices();
+  const selectedChoice = selectedModelChoiceId();
+  for (const button of elements.modelOptions?.querySelectorAll("[data-model-choice]") || []) {
+    const choice = SPEECH_MODEL_CHOICES.find((item) => item.id === button.dataset.modelChoice);
+    const webGpuUnavailable = choice?.device === "webgpu" && !supportsWebGPU();
+    const unavailable = choice?.backend !== "system" && !naturalVoiceAvailable();
+    const selected = choice?.id === selectedChoice;
+    button.setAttribute("aria-checked", String(selected));
+    button.disabled = webGpuUnavailable || unavailable;
+    const availability = button.querySelector(".model-availability");
+    if (availability) availability.textContent = webGpuUnavailable ? "Unavailable here" : unavailable ? "English works only" : "";
   }
   // Exact active model label – persisted and crash-safe (includes dtype/model)
   if (elements.activeModelLabel) {
@@ -1472,11 +1488,6 @@ function updateEngineUI() {
     else label = "System voice · explicit choice saved";
     elements.activeModelLabel.textContent = label;
     elements.activeModelLabel.title = label;
-  }
-  for (const [choice, element] of [["kokoro", elements.kokoroEngine], ["kitten", elements.kittenEngine], ["system", elements.systemEngine]]) {
-    if (!element || element.hidden) continue;
-    element.setAttribute("aria-pressed", String(state.backendPreference === choice));
-    element.disabled = choice !== "system" && !naturalVoiceAvailable();
   }
   elements.naturalVoiceRow.hidden = !isNeural || state.backendPreference === "kitten" || state.activeBackendId === "kitten-wasm";
   // Kitten has its own 8-voice picker – show only for Kitten
@@ -1511,12 +1522,8 @@ function updateEngineUI() {
     `Voice settings, ${isNeural ? `${backendLabel}, ${elements.voiceName.textContent}` : state.selectedVoice?.name || "System voice"}`,
   );
   elements.engineDescription.textContent = naturalVoiceAvailable()
-    ? state.backendPreference === "kitten"
-      ? `Kitten · ${state.kittenModel} · ${state.kittenDtype} · WASM · explicit choice`
-      : state.backendPreference === "kokoro"
-        ? `Kokoro · onnx-community/Kokoro-82M-v1.0-ONNX · ${state.kokoroDtype} · ${state.kokoroDevice === "webgpu" ? "WebGPU" : "WASM"} · explicit choice`
-        : "Explicit choice saved – pick Kitten (efficient) or Kokoro (natural) — no auto download"
-    : "Natural voice currently supports English works";
+    ? "Every available option, ordered by family and download size. Nothing downloads until Preview or Play."
+    : "Natural models are available for English works; the system voice remains instant.";
   elements.voiceNote.textContent = isNeural
     ? `${getModelDownloadDetails({ backend: state.backendPreference, kokoroDevice: state.kokoroDevice, kokoroDtype: state.kokoroDtype, kittenModel: state.kittenModel }).label}. The first play may download ${formatMegabytes(getModelDownloadDetails({ backend: state.backendPreference, kokoroDevice: state.kokoroDevice, kokoroDtype: state.kokoroDtype, kittenModel: state.kittenModel }).sizeMb)}; generated passages stay on this device.`
     : "System voices start instantly (no download). Choose Kitten (15M, fast) or Kokoro (82M, higher fidelity) to save an explicit local model choice.";
@@ -1734,9 +1741,12 @@ function setNeuralLoading(progress = null, detail = "Loading the natural voice")
   const wasHidden = elements.loadingView.hidden;
   elements.loadingTitle.textContent = "Preparing your natural voice…";
   elements.loadingDetail.textContent = detail;
-  elements.loadingProgress.hidden = progress === null;
+  elements.loadingProgress.hidden = false;
+  elements.loadingProgress.dataset.indeterminate = String(progress === null);
   if (progress !== null) {
     elements.loadingProgress.style.setProperty("--download-progress", `${Math.min(100, Math.max(0, progress))}%`);
+  } else {
+    elements.loadingProgress.style.setProperty("--download-progress", "32%");
   }
   elements.loadingCancel.hidden = false;
   elements.loadingView.dataset.kind = "voice";
@@ -1754,6 +1764,7 @@ function setLoadingIsolation(active) {
 function hideLoading() {
   elements.loadingView.hidden = true;
   elements.loadingProgress.hidden = true;
+  elements.loadingProgress.dataset.indeterminate = "false";
   elements.loadingProgress.style.setProperty("--download-progress", "0%");
   elements.loadingCancel.hidden = true;
   elements.loadingView.dataset.kind = "";
@@ -1765,6 +1776,7 @@ function ttsCallbacks() {
     onProgress(message) {
       const backendLabel = message.backend || state.activeBackendId || state.backendPreference || "local";
       const pct = Number.isFinite(message.progress) ? Math.round(message.progress) : null;
+      const filePct = Number.isFinite(message.fileProgress) ? Math.round(message.fileProgress) : pct;
       const file = message.file || "";
       const status = message.status || "";
       const isCached = message.cached || status === "cached";
@@ -1772,7 +1784,7 @@ function ttsCallbacks() {
       // Kokoro sends model files via transformers progress_callback.
       if (isCached) {
         const label = file.includes("voices") ? "voices.npz" : file || "voice model";
-        setNeuralLoading(pct ?? 100, `Loading ${label} [cached · ${backendLabel}]${pct !== null ? ` · ${pct}%` : ""}`);
+        setNeuralLoading(pct ?? 100, `Loading ${label} [cached · ${backendLabel}]${filePct !== null ? ` · ${filePct}%` : ""}`);
         if (state.playback === "buffering") {
           setPlayerStatus(file ? `Loading ${file.split("/").pop()} · cached · ${backendLabel}` : `Loading cached voice · ${backendLabel}`);
         }
@@ -1782,11 +1794,11 @@ function ttsCallbacks() {
         setNeuralLoading(null, `Initializing ${file || backendLabel} — compiling WASM`);
       } else if (status === "ready") {
         setNeuralLoading(100, `Voice ready [${backendLabel}]`);
-      } else if (file.includes("onnx") && pct !== null) {
-        setNeuralLoading(message.progress, `Downloading ${file} [${backendLabel}] · ${pct}%`);
-      } else if (file.includes("voices") && pct !== null) {
+      } else if (file.includes("onnx")) {
+        setNeuralLoading(message.progress, `Downloading ${file} [${backendLabel}]${filePct !== null ? ` · ${filePct}%` : ""}`);
+      } else if (file.includes("voices")) {
         const label = file.includes("voices") ? "voices.npz" : file;
-        setNeuralLoading(message.progress, `Downloading ${label} [${backendLabel}] · ${pct}%`);
+        setNeuralLoading(message.progress, `Downloading ${label} [${backendLabel}]${filePct !== null ? ` · ${filePct}%` : ""}`);
       } else if (status === "starting") {
         setNeuralLoading(null, `Starting ${backendLabel} [explicit choice]`);
       } else if (status === "progress" && pct !== null) {
@@ -1800,7 +1812,7 @@ function ttsCallbacks() {
       }
       // Also surface in player bar while buffering
       if (state.playback === "buffering") {
-        setPlayerStatus(file ? `Downloading ${file.split("/").pop()} · ${pct !== null ? pct + "% · " : ""}${backendLabel}` : `Preparing voice files · ${backendLabel}`);
+        setPlayerStatus(file ? `Downloading ${file.split("/").pop()} · ${filePct !== null ? filePct + "% · " : ""}${backendLabel}` : `Preparing voice files · ${backendLabel}`);
       }
     },
     onReady(message) {
@@ -2027,18 +2039,17 @@ function averageRtf() {
   return state.rtfSamples.reduce((sum, value) => sum + value, 0) / state.rtfSamples.length;
 }
 
-function bufferTargetSeconds(startup) {
+function bufferTargetSeconds() {
   const rtf = averageRtf();
-  if (startup) return rtf >= 0.9 ? 18 : 12;
   if (rtf >= 0.9) return 60;
   if (rtf >= 0.7) return 45;
   return 30;
 }
 
-async function prepareAudioBuffer(startIndex, { startup = false, epoch = state.generationEpoch } = {}) {
+async function prepareAudioBuffer(startIndex, { epoch = state.generationEpoch } = {}) {
   let bufferedSeconds = 0;
   let first = null;
-  for (let index = startIndex; index < state.neuralSegments.length && bufferedSeconds < bufferTargetSeconds(startup); index += 1) {
+  for (let index = startIndex; index < state.neuralSegments.length && bufferedSeconds < bufferTargetSeconds(); index += 1) {
     const priority = index === startIndex ? 0 : index === startIndex + 1 ? 1 : 2;
     const entry = await getNeuralSegment(index, priority, epoch);
     if (epoch !== state.generationEpoch) throw new Error("Discarded stale buffer work.");
@@ -2210,9 +2221,7 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
     // sentence is ready; subsequent sentences are filled in the background.
     // Waiting for a time-based startup buffer here would make the smaller
     // passages feel slower than the older multi-sentence batches.
-    const audio = state.backendPreference === "kitten"
-      ? await getNeuralSegment(segmentIndex, 0, epoch)
-      : await prepareAudioBuffer(segmentIndex, { startup: true, epoch });
+    const audio = await getNeuralSegment(segmentIndex, 0, epoch);
     if (!audio || state.engine === "system") {
       state.currentIndex = safeIndex;
       startSpeechAt(safeIndex);
@@ -2834,26 +2843,46 @@ function initMediaSession() {
   }
 }
 
-async function selectEngine(nextEngine) {
-  if (nextEngine !== "system" && !naturalVoiceAvailable()) {
+async function selectModelChoice(choiceId) {
+  const choice = SPEECH_MODEL_CHOICES.find((item) => item.id === choiceId);
+  if (!choice) return;
+  if (choice.backend !== "system" && !naturalVoiceAvailable()) {
     showToast("Natural voice currently supports English works.");
     return;
   }
-  if (nextEngine === state.backendPreference) return;
+  if (choice.device === "webgpu" && !supportsWebGPU()) {
+    showToast("WebGPU is not available in this browser.");
+    return;
+  }
+  if (choice.device === "webgpu" && IS_ANDROID && !confirm("WebGPU is known to crash the stress harness on some Android devices. Continue with WebGPU?")) return;
+  if (choice.id === selectedModelChoiceId()) return;
 
   const wasPlaying = state.playback === "playing";
   const targetWord = currentWordPosition();
   const targetIndex = chunkIndexForWord(targetWord);
   stopSpeech("paused");
   await resetNeuralWorker(new Error("Playback model changed."));
-  state.backendPreference = nextEngine;
-  state.engine = nextEngine === "system" ? "system" : "neural";
-  localStorage.setItem(`${STORAGE_PREFIX}tts-backend`, nextEngine);
+  state.backendPreference = choice.backend;
+  state.engine = choice.backend === "system" ? "system" : "neural";
+  localStorage.setItem(`${STORAGE_PREFIX}tts-backend`, choice.backend);
+  if (choice.backend === "kitten") {
+    state.kittenModel = choice.model;
+    state.kittenDtype = choice.dtype;
+    localStorage.setItem(`${STORAGE_PREFIX}kitten-model`, choice.model);
+    localStorage.setItem(`${STORAGE_PREFIX}kitten-dtype`, choice.dtype);
+  } else if (choice.backend === "kokoro") {
+    state.kokoroDevice = choice.device;
+    state.kokoroDtype = choice.dtype;
+    localStorage.setItem(`${STORAGE_PREFIX}kokoro-device`, choice.device);
+    localStorage.setItem(`${STORAGE_PREFIX}kokoro-dtype`, choice.dtype);
+  }
   state.currentIndex = targetIndex;
+  clearNeuralCache();
   rebuildNeuralSegments();
   updateEngineUI();
   updateActiveBlock(state.chunks[targetIndex]);
   updateProgress();
+  showToast(`${choice.name} selected${choice.backend === "system" ? "" : " — downloads only on Preview or Play"}`);
 
   if (wasPlaying) {
     if (state.engine === "neural") requestNeuralAction(() => playNeuralFromChunk(targetIndex, targetWord));
@@ -2995,10 +3024,16 @@ elements.seekRange.addEventListener("change", () => {
   seekToIndex(chunkIndexForWord(targetWord), true, targetWord);
 });
 
-elements.voiceButton.addEventListener("click", () => elements.voiceSheet.showModal());
-elements.kokoroEngine.addEventListener("click", () => selectEngine("kokoro"));
-elements.kittenEngine.addEventListener("click", () => selectEngine("kitten"));
-elements.systemEngine.addEventListener("click", () => selectEngine("system"));
+elements.voiceButton.addEventListener("click", () => {
+  elements.voiceSheet.showModal();
+  requestAnimationFrame(() => {
+    elements.modelOptions?.querySelector('[aria-checked="true"]')?.scrollIntoView({ block: "nearest" });
+  });
+});
+elements.modelOptions?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-model-choice]");
+  if (button && !button.disabled) selectModelChoice(button.dataset.modelChoice);
+});
 elements.naturalVoiceSelect.addEventListener("change", async () => {
   const targetWord = currentWordPosition();
   const wasPlaying = state.playback === "playing";
@@ -3012,59 +3047,6 @@ elements.naturalVoiceSelect.addEventListener("change", async () => {
     playNeuralFromChunk(chunkIndexForWord(targetWord), targetWord);
   }
 });
-if (elements.kokoroDeviceSelect) {
-  elements.kokoroDeviceSelect.addEventListener("change", () => {
-    const next = elements.kokoroDeviceSelect.value === "webgpu" ? "webgpu" : "wasm";
-    if (next === state.kokoroDevice) return;
-    if (IS_ANDROID && next === "webgpu" && !confirm("WebGPU is known to crash the stress harness on some Android devices. Continue with WebGPU?")) {
-      elements.kokoroDeviceSelect.value = state.kokoroDevice;
-      return;
-    }
-    state.kokoroDevice = next;
-    localStorage.setItem(`${STORAGE_PREFIX}kokoro-device`, next);
-    // Persist explicit device choice; reset backend so next play uses new device.
-    resetNeuralWorker(new Error("Switching Kokoro compute device")).catch(() => {});
-    clearNeuralCache();
-    updateEngineUI();
-    showToast(next === "webgpu" ? "Kokoro WebGPU selected – will be probed only after you press Play" : "Kokoro WASM selected");
-  });
-}
-if (elements.kokoroDtypeSelect) {
-  elements.kokoroDtypeSelect.addEventListener("change", () => {
-    const next = elements.kokoroDtypeSelect.value;
-    if (!KOKORO_DTYPES.includes(next) || next === state.kokoroDtype) return;
-    state.kokoroDtype = next;
-    localStorage.setItem(`${STORAGE_PREFIX}kokoro-dtype`, next);
-    resetNeuralWorker(new Error("Switching Kokoro precision")).catch(() => {});
-    clearNeuralCache();
-    updateEngineUI();
-    showToast(`Kokoro dtype → ${next} — next play refetches`);
-  });
-}
-if (elements.kittenModelSelect) {
-  elements.kittenModelSelect.addEventListener("change", () => {
-    const next = elements.kittenModelSelect.value;
-    if (!KITTEN_MODELS.includes(next) || next === state.kittenModel) return;
-    state.kittenModel = next;
-    localStorage.setItem(`${STORAGE_PREFIX}kitten-model`, next);
-    resetNeuralWorker(new Error("Switching Kitten model")).catch(() => {});
-    clearNeuralCache();
-    updateEngineUI();
-    showToast(`Kitten model → ${next.split("/").pop()} — next play refetches`);
-  });
-}
-if (elements.kittenDtypeSelect) {
-  elements.kittenDtypeSelect.addEventListener("change", () => {
-    const next = elements.kittenDtypeSelect.value;
-    if (!KITTEN_DTYPES.includes(next) || next === state.kittenDtype) return;
-    state.kittenDtype = next;
-    localStorage.setItem(`${STORAGE_PREFIX}kitten-dtype`, next);
-    resetNeuralWorker(new Error("Switching Kitten dtype")).catch(() => {});
-    clearNeuralCache();
-    updateEngineUI();
-    showToast(`Kitten dtype → ${next} — next play refetches`);
-  });
-}
 if (elements.kittenVoiceSelect) {
   elements.kittenVoiceSelect.addEventListener("change", () => {
     const next = elements.kittenVoiceSelect.value;
@@ -3299,7 +3281,6 @@ loadVoices();
 initMediaSession();
 elements.libraryButton.hidden = true;
 updateContinueListening();
-loadCatalog();
 
 async function resolveCurrentRoute({ historyMode = "none", routeState = history.state } = {}) {
   if (routeState?.view === "library") {

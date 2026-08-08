@@ -7,25 +7,26 @@ import { resolve } from "node:path";
 // where ReadableStream is not asyncIterable. Replace at bundle time
 // with a getReader loop (also polyfilled at runtime in kitten-runtime).
 function webkitReadableStreamPatch() {
+  const patchLoader = (code, id) => {
+    if (!code.includes("for await")) return null;
+    const pattern = /for await\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\s+([A-Za-z_$][\w$]*)\s*\)\s*([A-Za-z_$][\w$]*)\.push\(\1\)/g;
+    const patched = code.replace(
+      pattern,
+      (_match, chunk, stream, chunks) =>
+        `{const _r=${stream}.getReader();try{for(;;){const{done:${chunk},value:_v}=await _r.read();if(${chunk})break;${chunks}.push(_v)}}finally{_r.releaseLock()}}`,
+    );
+    return patched === code ? null : patched;
+  };
+
   return {
     name: "webkit-readable-stream-patch",
     transform(code, id) {
-      // Match the espeak-ng gzip loader regardless of minified var names.
-      // Original: `for await(const A of e)C.push(A)` -> minified varies.
-      if (code.includes("DecompressionStream") && code.includes("for await")) {
-        // Replace `for await(const X of Y)Z.push(X)` with getReader loop.
-        const pattern = /for await\s*\(\s*const\s+(\w+)\s+of\s+(\w+)\s*\)\s*(\w+)\.push\(\1\)/g;
-        const patched = code.replace(
-          pattern,
-          (_m, chunk, stream, arr) =>
-            `{const _r=${stream}.getReader();try{for(;;){const{done:${chunk},value:_v}=await _r.read();if(${chunk})break;${arr}.push(_v)}}finally{_r.releaseLock()}}`,
-        );
-        if (patched === code) {
-          throw new Error(`WebKit ReadableStream compatibility patch did not match ${id}. Update vite.config.js before shipping.`);
-        }
-        return { code: patched, map: null };
-      }
-      return null;
+      const patched = patchLoader(code, id);
+      return patched === null ? null : { code: patched, map: null };
+    },
+    renderChunk(code, chunk) {
+      const patched = patchLoader(code, chunk.fileName);
+      return patched === null ? null : { code: patched, map: null };
     },
   };
 }
@@ -47,6 +48,7 @@ export default defineConfig({
   },
   worker: {
     format: "es",
+    plugins: () => [webkitReadableStreamPatch()],
   },
   build: {
     rollupOptions: {

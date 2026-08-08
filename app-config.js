@@ -27,6 +27,73 @@ const KITTEN_DOWNLOAD_MB = {
   "onnx-community/kitten-tts-nano-0.1-ONNX": 40,
 };
 
+const KITTEN_MODEL_LABELS = {
+  "onnx-community/kitten-tts-nano-0.1-ONNX": ["Kitten Nano 0.1", "Legacy release"],
+  "KittenML/kitten-tts-micro-0.8": ["Kitten Micro 0.8", "Compact · experimental"],
+  [KITTEN_DEFAULT_MODEL]: ["Kitten Nano 0.8", "15M · supported default"],
+  "KittenML/kitten-tts-mini-0.8": ["Kitten Mini 0.8", "Larger · experimental"],
+};
+
+const sortedKittenModels = [
+  "onnx-community/kitten-tts-nano-0.1-ONNX",
+  "KittenML/kitten-tts-micro-0.8",
+  KITTEN_DEFAULT_MODEL,
+  "KittenML/kitten-tts-mini-0.8",
+];
+
+const sortedKokoroDtypes = [...KOKORO_DTYPES].sort((left, right) => KOKORO_DOWNLOAD_MB[left] - KOKORO_DOWNLOAD_MB[right]);
+
+export const SPEECH_MODEL_CHOICES = Object.freeze([
+  {
+    id: "system",
+    group: "Instant",
+    name: "System voice",
+    detail: "Installed on this device · starts immediately",
+    repository: "Browser / operating-system voice",
+    sizeMb: 0,
+    backend: "system",
+    device: "system",
+    dtype: "native",
+  },
+  ...sortedKittenModels.map((model) => ({
+    id: `kitten:${model}`,
+    group: "Kitten · efficient",
+    name: KITTEN_MODEL_LABELS[model][0],
+    detail: KITTEN_MODEL_LABELS[model][1],
+    repository: model,
+    sizeMb: KITTEN_DOWNLOAD_MB[model],
+    estimated: true,
+    backend: "kitten",
+    device: "wasm",
+    dtype: "fp32",
+    model,
+  })),
+  ...sortedKokoroDtypes.map((dtype) => ({
+    id: `kokoro:wasm:${dtype}`,
+    group: "Kokoro · higher fidelity",
+    name: `Kokoro 82M · ${dtype}`,
+    detail: `${dtype === "q8" ? "Recommended balance" : "WASM precision option"} · local generation`,
+    repository: KOKORO_MODEL,
+    sizeMb: KOKORO_DOWNLOAD_MB[dtype],
+    backend: "kokoro",
+    device: "wasm",
+    dtype,
+    model: KOKORO_MODEL,
+  })),
+  {
+    id: "kokoro:webgpu:fp32",
+    group: "Kokoro · higher fidelity",
+    name: "Kokoro 82M · fp32 WebGPU",
+    detail: "Experimental · probed only after confirmation",
+    repository: KOKORO_MODEL,
+    sizeMb: KOKORO_DOWNLOAD_MB.fp32,
+    backend: "kokoro",
+    device: "webgpu",
+    dtype: "fp32",
+    model: KOKORO_MODEL,
+  },
+]);
+
 export function getModelDownloadDetails({ backend, kokoroDevice = "wasm", kokoroDtype = "q8", kittenModel = KITTEN_DEFAULT_MODEL }) {
   if (backend === "kokoro") {
     const dtype = kokoroDevice === "webgpu" ? "fp32" : (KOKORO_DTYPES.includes(kokoroDtype) ? kokoroDtype : "q8");

@@ -62,6 +62,10 @@ export async function getCachedAudio(key) {
   const entry = await requestResult(store.get(key));
   if (entry) store.put({ ...entry, lastAccessed: Date.now() });
   await done;
+  if (entry?.blob) return entry;
+  if (entry?.buffer) {
+    return { ...entry, blob: new Blob([entry.buffer], { type: entry.type || "audio/wav" }) };
+  }
   return entry;
 }
 
@@ -69,7 +73,7 @@ async function putAudioEntry(entry) {
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const done = transactionDone(transaction);
-  transaction.objectStore(STORE_NAME).put(entry);
+  await requestResult(transaction.objectStore(STORE_NAME).put(entry));
   await done;
 }
 
@@ -78,7 +82,7 @@ export async function pruneAudioCache(maxBytes = MAX_AUDIO_CACHE_BYTES) {
   const entries = await allEntries(database);
   const normalized = entries.map((entry) => ({
     ...entry,
-    size: entry.size || entry.blob?.size || 0,
+    size: entry.size || entry.blob?.size || entry.buffer?.byteLength || 0,
   }));
   const keys = selectAudioEvictions(normalized, maxBytes);
   if (keys.length) {
@@ -98,7 +102,11 @@ export async function pruneAudioCache(maxBytes = MAX_AUDIO_CACHE_BYTES) {
 }
 
 export async function putCachedAudio({ key, blob, duration, createdAt = Date.now() }) {
-  const entry = { key, blob, duration, createdAt, lastAccessed: createdAt, size: blob?.size || 0 };
+  // Safari/WebKit can reject Blob values in IndexedDB with
+  // “Error preparing Blob/File data”. ArrayBuffer is reliably cloneable, and
+  // getCachedAudio recreates the local WAV Blob when reading it back.
+  const buffer = await blob.arrayBuffer();
+  const entry = { key, buffer, type: blob.type || "audio/wav", duration, createdAt, lastAccessed: createdAt, size: buffer.byteLength };
   try {
     await putAudioEntry(entry);
   } catch (error) {
@@ -138,7 +146,7 @@ export async function getTtsCacheStats() {
   const entries = await allEntries(database);
   return entries.reduce((stats, entry) => {
     stats.count += 1;
-    stats.bytes += entry.size || entry.blob?.size || 0;
+    stats.bytes += entry.size || entry.blob?.size || entry.buffer?.byteLength || 0;
     return stats;
   }, { count: 0, bytes: 0 });
 }

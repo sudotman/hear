@@ -276,17 +276,14 @@
         </button>
       </div>
 
-      <div class="setting-row engine-setting-row">
-        <div class="setting-label">
-          <span>Playback engine</span>
-          <small id="engine-description">System voice · instant · no download</small>
+      <section class="model-picker" aria-labelledby="model-picker-title">
+        <div class="model-picker-head">
+          <div><span id="model-picker-title">Playback model</span><small id="engine-description">Every available option, ordered by family and download size.</small></div>
+          <small>Instant → efficient → higher fidelity</small>
         </div>
-        <div class="engine-options" role="group" aria-label="Playback engine">
-          <button id="kokoro-engine" type="button" aria-pressed="false"><span>Natural</span><small>Kokoro</small></button>
-          <button id="kitten-engine" type="button" aria-pressed="false"><span>Efficient</span><small>Kitten</small></button>
-          <button id="system-engine" type="button" aria-pressed="true"><span>Instant</span><small>System voice</small></button>
-        </div>
-      </div>
+        <div class="model-options" id="model-options" role="radiogroup" aria-label="Playback model"></div>
+        <p class="active-model"><span>Selected</span><small id="active-model-label">System voice · instant · no download</small></p>
+      </section>
 
       <div class="setting-row voice-select-row" id="natural-voice-row" hidden>
         <label for="natural-voice-select"><span>Natural voice</span><small>Higher fidelity · English works</small></label>
@@ -320,10 +317,6 @@
         <select id="voice-select"></select>
       </div>
 
-      <div class="setting-row" id="active-model-row">
-        <div class="setting-label"><span>Active model</span><small id="active-model-label">System voice · instant · no download</small></div>
-      </div>
-
       <div class="setting-row">
         <label for="rate-range"><span>Speaking rate</span><small id="rate-description">Natural pace</small></label>
         <div class="range-setting"><input id="rate-range" type="range" min="0.7" max="1.5" step="0.05" value="1" /><output id="rate-output">1×</output></div>
@@ -335,7 +328,7 @@
       </div>
 
       <button class="advanced-launch" id="advanced-settings-button" type="button">
-        <span><strong>Model &amp; storage</strong><small>Compute, precision, downloads, and saved audio</small></span><span aria-hidden="true">→</span>
+        <span><strong>Storage &amp; privacy</strong><small>Saved models, generated audio, and local data</small></span><span aria-hidden="true">→</span>
       </button>
 
       <div class="sheet-actions">
@@ -349,28 +342,8 @@
 
     <dialog class="sheet advanced-sheet" id="advanced-sheet" aria-labelledby="advanced-sheet-title">
       <div class="sheet-head">
-        <div><p class="eyebrow">Local voice details</p><h2 id="advanced-sheet-title">Model &amp; storage.</h2></div>
+        <div><p class="eyebrow">On-device data</p><h2 id="advanced-sheet-title">Storage &amp; privacy.</h2></div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kokoro-device-row" hidden>
-        <label for="kokoro-device-select"><span>Kokoro compute</span><small id="kokoro-device-help">WASM is stable · WebGPU is experimental</small></label>
-        <div class="voice-choice"><select id="kokoro-device-select"><option value="wasm">WASM · stable</option><option value="webgpu">WebGPU · experimental (fp32)</option></select><p class="voice-traits" id="kokoro-device-note">Explicit and saved per device.</p></div>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kokoro-dtype-row" hidden>
-        <label for="kokoro-dtype-select"><span>Kokoro precision</span><small id="kokoro-dtype-help">Changes model size and redownloads</small></label>
-        <div class="voice-choice"><select id="kokoro-dtype-select"><option value="fp32">fp32 · 326 MB</option><option value="fp16">fp16 · 163 MB</option><option value="q8">q8 · 92 MB</option><option value="q4">q4 · 305 MB</option><option value="q4f16">q4f16 · 154 MB</option><option value="uint8">uint8 · 177 MB</option></select><p class="voice-traits" id="kokoro-dtype-note"></p></div>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kitten-model-row" hidden>
-        <label for="kitten-model-select"><span>Kitten model</span><small id="kitten-model-help">Nano is the supported default</small></label>
-        <div class="voice-choice"><select id="kitten-model-select"><option value="onnx-community/KittenTTS-Nano-v0.8-ONNX">Nano 0.8 · 15M · fp32 — default</option><option value="KittenML/kitten-tts-mini-0.8">Mini 0.8 · experimental</option><option value="KittenML/kitten-tts-micro-0.8">Micro 0.8 · experimental</option><option value="onnx-community/kitten-tts-nano-0.1-ONNX">Nano 0.1 · legacy</option></select><p class="voice-traits" id="kitten-model-note"></p></div>
-      </div>
-
-      <div class="setting-row voice-select-row" id="kitten-dtype-row" hidden>
-        <label for="kitten-dtype-select"><span>Kitten precision</span><small id="kitten-dtype-help">WASM numeric format</small></label>
-        <div class="voice-choice"><select id="kitten-dtype-select"><option value="fp32">fp32 · full (required)</option></select><p class="voice-traits" id="kitten-dtype-note"></p></div>
       </div>
 
       <details class="model-details">

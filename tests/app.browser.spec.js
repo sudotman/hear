@@ -34,17 +34,23 @@ test.afterEach(async ({ page }) => {
 
 test("keeps neural models idle until explicit download consent", async ({ page }) => {
   const modelRequests = [];
+  const unrelatedCatalogRequests = [];
   page.on("request", (request) => {
     if (/huggingface|\.onnx(?:\?|$)|voices\.bin/i.test(request.url())) modelRequests.push(request.url());
+    if (/gutenberg\.org\/ebooks\/search\.opds/i.test(request.url())) unrelatedCatalogRequests.push(request.url());
   });
 
   await page.goto("/?lang=en&title=Test%20Work");
   await expect(page.getByRole("heading", { name: "Test Work", level: 1 })).toBeVisible();
   await expect(page.locator("#active-model-label")).toContainText("System voice");
   expect(modelRequests).toEqual([]);
+  expect(unrelatedCatalogRequests).toEqual([]);
 
   await page.locator("#voice-button").click();
-  await page.locator("#kitten-engine").click();
+  const choices = page.locator("#model-options [data-model-choice]");
+  await expect(choices).toHaveCount(12);
+  await expect(choices.first()).toContainText("System voice");
+  await page.locator(`[data-model-choice="kitten:onnx-community/KittenTTS-Nano-v0.8-ONNX"]`).click();
   await expect(page.locator("#active-model-label")).toContainText("onnx-community/KittenTTS-Nano-v0.8-ONNX");
   expect(modelRequests).toEqual([]);
 

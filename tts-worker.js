@@ -1,4 +1,9 @@
-import { KittenRuntime } from "./kitten-runtime.js";
+import { installReadableStreamAsyncIterator } from "./stream-compat.js";
+
+// This must run before importing either neural runtime. Older WebKit supports
+// ReadableStream but not its async iterator; phonemizer initializes an async
+// stream at module evaluation time and otherwise rejects before synthesis.
+installReadableStreamAsyncIterator();
 
 let runtime = null;
 let initialization = null;
@@ -6,18 +11,37 @@ let backend = null;
 let activeEpoch = 0;
 let processing = false;
 const queue = [];
+const downloadProgress = new Map();
 
 function postProgress(progress) {
-  const value = Number.isFinite(progress.progress)
+  const fileProgress = Number.isFinite(progress.progress)
     ? progress.progress
     : progress.total > 0
       ? (progress.loaded / progress.total) * 100
       : null;
+  let value = fileProgress;
+  if (progress.file && (progress.status === "progress" || progress.status === "cached")) {
+    downloadProgress.set(progress.file, {
+      loaded: Number(progress.loaded) || 0,
+      total: Number(progress.total) || 0,
+      progress: fileProgress,
+    });
+    const entries = [...downloadProgress.values()];
+    const total = entries.reduce((sum, entry) => sum + entry.total, 0);
+    const loaded = entries.reduce((sum, entry) => sum + Math.min(entry.loaded, entry.total || entry.loaded), 0);
+    const finite = entries.map((entry) => entry.progress).filter(Number.isFinite);
+    value = total > 0 && entries.every((entry) => entry.total > 0)
+      ? (loaded / total) * 100
+      : finite.length === entries.length
+        ? finite.reduce((sum, entry) => sum + entry, 0) / finite.length
+        : null;
+  }
   self.postMessage({
     type: "progress",
     status: progress.status,
     file: progress.file || "",
     progress: value,
+    fileProgress,
     cached: !!progress.cached,
   });
 }
@@ -54,6 +78,7 @@ async function initialize(config = backend) {
   initialization = (async () => {
     postProgress({ status: "starting", file: "", progress: null });
     if (backend.id === "kitten-wasm") {
+      const { KittenRuntime } = await import("./kitten-runtime.js");
       runtime = new KittenRuntime({ onProgress: postProgress, model: backend.model, dtype: backend.dtype });
       await runtime.load();
     } else {
@@ -84,8 +109,6 @@ async function initialize(config = backend) {
 }
 
 async function generate(job) {
-  const model = await initialize();
-  if (job.epoch !== activeEpoch) return;
   const startedAt = performance.now();
   const queueWaitSeconds = (startedAt - job.enqueuedAt) / 1000;
   const postStage = (stage) => self.postMessage({
@@ -98,6 +121,8 @@ async function generate(job) {
     stage,
   });
   try {
+    const model = await initialize();
+    if (job.epoch !== activeEpoch) return;
     let buffer;
     let duration;
     if (backend.id === "kitten-wasm") {
@@ -181,7 +206,9 @@ self.addEventListener("message", (event) => {
   }
   if (message.type === "generate") {
     queue.push({ ...message, priority: message.priority ?? 2, enqueuedAt: performance.now(), sequence: sequence++ });
-    drainQueue();
+    drainQueue().catch((error) => {
+      self.postMessage({ type: "fatal", message: error.message || "The local voice worker stopped unexpectedly." });
+    });
     return;
   }
   if (message.type === "dispose") {
