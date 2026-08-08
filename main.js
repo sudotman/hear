@@ -947,7 +947,7 @@ function wikipediaSearchImage(page, origin) {
   const source = page?.thumbnail?.url || "";
   if (!source) return "";
   try {
-    return new URL(source, origin).href.replace(/\/\d+px-/, "/640px-");
+    return new URL(source, origin).href;
   } catch {
     return "";
   }
