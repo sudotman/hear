@@ -2587,6 +2587,77 @@ input[type="range"]::-moz-range-thumb {
   list-style: none;
 }
 
+.apple-shortcut-setup {
+  padding: 30px 44px 28px;
+  border-bottom: 1px solid var(--line);
+}
+
+.apple-shortcut-setup > p {
+  max-width: 440px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.apple-shortcut-setup .setup-option-label {
+  margin-bottom: 8px;
+  color: var(--accent-deep);
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.apple-shortcut-link {
+  display: flex;
+  min-height: 58px;
+  margin-top: 20px;
+  padding: 0 20px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--paper);
+  background: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 160ms ease;
+}
+
+.apple-shortcut-link:hover,
+.apple-shortcut-link:focus-visible {
+  background: var(--accent-deep);
+}
+
+.apple-shortcut-setup small {
+  display: block;
+  margin-top: 12px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.setup-divider {
+  display: flex;
+  padding: 24px 44px 0;
+  align-items: center;
+  gap: 14px;
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.setup-divider::after {
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+  content: "";
+}
+
 .setup-steps li {
   display: grid;
   padding: 18px 0;
@@ -3324,6 +3395,15 @@ input[type="range"]::-moz-range-thumb {
 
   .setup-steps {
     padding: 10px 25px 6px;
+  }
+
+  .apple-shortcut-setup {
+    padding: 26px 25px 24px;
+  }
+
+  .setup-divider {
+    padding-right: 25px;
+    padding-left: 25px;
   }
 
   .bookmarklet {

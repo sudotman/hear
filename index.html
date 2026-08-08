@@ -145,7 +145,7 @@
               <input id="article-query" name="article" autocomplete="off" spellcheck="false" placeholder="en.wikipedia.org/wiki/…" required />
               <button type="submit" aria-label="Open Wikipedia article"><span>Open article</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
             </div>
-            <button class="shortcut-link" id="setup-button" type="button">Add the Safari shortcut</button>
+            <button class="shortcut-link" id="setup-button" type="button">Add the Hear shortcut</button>
           </form>
         </section>
 
@@ -395,20 +395,35 @@
     <dialog class="sheet setup-sheet" id="setup-sheet" aria-labelledby="setup-title">
       <div class="sheet-head">
         <div>
-          <p class="eyebrow">One-time Safari setup</p>
+          <p class="eyebrow">One-time shortcut setup</p>
           <h2 id="setup-title">Send an article here.</h2>
         </div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
       </div>
+      <section class="apple-shortcut-setup" aria-labelledby="apple-shortcut-title">
+        <p class="setup-option-label" id="apple-shortcut-title">Share Sheet · iPhone &amp; iPad</p>
+        <p>Send a Wikipedia article straight to Hear from Safari or any app that shares its link.</p>
+        <a
+          class="apple-shortcut-link"
+          href="https://www.icloud.com/shortcuts/c7bdc6f3b47c4c838c2bb808ff0731d7"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Add to Apple Shortcuts
+          <span aria-hidden="true">↗</span>
+        </a>
+        <small>After adding it, open an article and choose Share → “send to hear!”</small>
+      </section>
+      <div class="setup-divider"><span>Safari bookmarklet · Mac</span></div>
       <ol class="setup-steps">
         <li><span>1</span><p>Show Safari’s Favorites Bar with <strong>⌘⇧B</strong>.</p></li>
         <li><span>2</span><p>Drag the button below into the bar.</p></li>
         <li><span>3</span><p>Click it from any Wikipedia article.</p></li>
       </ol>
       <a class="bookmarklet" id="bookmarklet-link" href="#">Listen with Hear <span>↗</span></a>
-      <p class="setup-fineprint">On iPhone or iPad, bookmark this page, edit the bookmark, then replace its address with the shortcut copied below.</p>
+      <p class="setup-fineprint">The bookmarklet works without Apple Shortcuts. On iPhone or iPad, bookmark this page, edit the bookmark, then replace its address with the code copied below.</p>
       <button class="copy-shortcut" id="copy-bookmarklet" type="button">Copy shortcut code</button>
     </dialog>
 
