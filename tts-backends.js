@@ -155,8 +155,8 @@ class WorkerTtsBackend {
   }
 }
 
-export const KOKORO_DTYPE_OPTIONS = ["fp32", "fp16", "q8", "q8f16", "q4", "q4f16", "uint8", "uint8f16"];
-export const KITTEN_DTYPE_OPTIONS = ["fp32", "fp16", "q8", "q4"];
+export const KOKORO_DTYPE_OPTIONS = ["fp32", "fp16", "q8", "q4", "q4f16", "uint8"];
+export const KITTEN_DTYPE_OPTIONS = ["fp32"];
 export const KITTEN_MODEL_OPTIONS = [
   "onnx-community/KittenTTS-Nano-v0.8-ONNX",
   "KittenML/kitten-tts-mini-0.8",

@@ -352,11 +352,9 @@
             <option value="fp32">fp32 · full · 326 MB (model.onnx)</option>
             <option value="fp16">fp16 · half · 163 MB (model_fp16.onnx)</option>
             <option value="q8">q8 · quantized · 92 MB (model_quantized.onnx)</option>
-            <option value="q8f16">q8f16 · mixed · 86 MB (model_q8f16.onnx)</option>
             <option value="q4">q4 · 4-bit · 305 MB (model_q4.onnx)</option>
             <option value="q4f16">q4f16 · 4-bit+fp16 · 154 MB (model_q4f16.onnx)</option>
             <option value="uint8">uint8 · 177 MB (model_uint8.onnx)</option>
-            <option value="uint8f16">uint8f16 · 114 MB (model_uint8f16.onnx)</option>
           </select>
           <p class="voice-traits" id="kokoro-dtype-note">Saved as hearwiki:kokoro-dtype. Cache key includes dtype — switching refetches.</p>
         </div>
@@ -406,11 +404,8 @@
         <div class="voice-choice">
           <select id="kitten-dtype-select">
             <option value="fp32">fp32 · full (default)</option>
-            <option value="fp16">fp16 · half (exp.)</option>
-            <option value="q8">q8 · quantized (exp.)</option>
-            <option value="q4">q4 · 4-bit (exp.)</option>
           </select>
-          <p class="voice-traits" id="kitten-dtype-note">Saved as hearwiki:kitten-dtype. If dtype unsupported, will error.</p>
+          <p class="voice-traits" id="kitten-dtype-note">Saved as hearwiki:kitten-dtype. Only fp32 is shipped for Nano 0.8.</p>
         </div>
       </div>
 
@@ -462,6 +457,20 @@
           <small id="storage-usage-label">Generated audio (IndexedDB) · library & progress (localStorage) · model files (browser cache)</small>
         </div>
         <div class="voice-choice storage-actions">
+          <div class="model-cache-manager" id="model-cache-manager">
+            <div class="model-cache-head">
+              <span class="model-cache-title">Saved models</span>
+              <span class="model-cache-total" id="model-cache-total">—</span>
+              <button type="button" id="refresh-model-cache" class="text-button small ghost" aria-label="Refresh saved models">Refresh</button>
+            </div>
+            <div id="model-cache-list" class="model-cache-list" aria-live="polite">
+              <span class="model-cache-empty">Checking saved models…</span>
+            </div>
+            <div class="model-cache-actions">
+              <button type="button" id="clear-model-cache" class="text-button storage-button">Clear saved models</button>
+            </div>
+            <p class="voice-traits model-cache-hint">Models are stored via CacheStorage (<code>kitten-cache</code> · <code>transformers-cache</code> · <code>kokoro-voices</code>). Delete a single file or clear all — next play will re-download.</p>
+          </div>
           <button type="button" id="clear-audio-cache" class="text-button storage-button">Clear generated audio</button>
           <button type="button" id="clear-all-data" class="text-button storage-button storage-danger">Clear all Hear data</button>
           <p class="voice-traits" id="storage-note">No text or audio is sent to a server. “Clear generated audio” wipes hearwiki-tts-cache. “Clear all” also wipes hearwiki:tts-backend / kokoro-device / neural-voice, library, and progress.</p>

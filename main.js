@@ -11,6 +11,7 @@ import {
 } from "./library.js";
 import { KokoroWebGPU, KokoroWasm, KittenWasm } from "./tts-backends.js";
 import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, getTtsCacheCount, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
+import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -116,6 +117,10 @@ const elements = {
   activeModelLabel: $("#active-model-label"),
   clearAudioCache: $("#clear-audio-cache"),
   clearAllData: $("#clear-all-data"),
+  modelCacheList: $("#model-cache-list"),
+  modelCacheTotal: $("#model-cache-total"),
+  refreshModelCache: $("#refresh-model-cache"),
+  clearModelCache: $("#clear-model-cache"),
   storageUsageLabel: $("#storage-usage-label"),
   storageNote: $("#storage-note"),
   voiceNote: $("#voice-note"),
@@ -255,8 +260,13 @@ const rawKokoroDevice = localStorage.getItem(`${STORAGE_PREFIX}kokoro-device`);
 const initialKokoroDevice = rawKokoroDevice === "webgpu" ? "webgpu" : "wasm";
 const rawKokoroDtype = localStorage.getItem(`${STORAGE_PREFIX}kokoro-dtype`);
 const KOKORO_DTYPE_DEFAULT = "q8";
-const KOKORO_DTYPES = ["fp32", "fp16", "q8", "q8f16", "q4", "q4f16", "uint8", "uint8f16"];
-const initialKokoroDtype = KOKORO_DTYPES.includes(rawKokoroDtype) ? rawKokoroDtype : KOKORO_DTYPE_DEFAULT;
+const KOKORO_DTYPES = ["fp32", "fp16", "q8", "q4", "q4f16", "uint8"];
+// Migration: older installs may have stored q8f16/uint8f16 which transformers rejects (Invalid dtype)
+if (rawKokoroDtype === "q8f16" || rawKokoroDtype === "uint8f16") {
+  localStorage.setItem(`${STORAGE_PREFIX}kokoro-dtype`, KOKORO_DTYPE_DEFAULT);
+}
+const _migratedKokoroDtype = localStorage.getItem(`${STORAGE_PREFIX}kokoro-dtype`);
+const initialKokoroDtype = KOKORO_DTYPES.includes(_migratedKokoroDtype) ? _migratedKokoroDtype : KOKORO_DTYPE_DEFAULT;
 const rawKittenModel = localStorage.getItem(`${STORAGE_PREFIX}kitten-model`);
 const KITTEN_MODELS = [
   "onnx-community/KittenTTS-Nano-v0.8-ONNX",
@@ -266,7 +276,11 @@ const KITTEN_MODELS = [
 ];
 const initialKittenModel = KITTEN_MODELS.includes(rawKittenModel) ? rawKittenModel : KITTEN_MODELS[0];
 const rawKittenDtype = localStorage.getItem(`${STORAGE_PREFIX}kitten-dtype`);
-const KITTEN_DTYPES = ["fp32", "fp16", "q8", "q4"];
+const KITTEN_DTYPES = ["fp32"];
+// Migration: older installs may have stored fp16/q8/q4 which Kitten Nano 0.8 does not ship
+if (rawKittenDtype && !KITTEN_DTYPES.includes(rawKittenDtype)) {
+  localStorage.setItem(`${STORAGE_PREFIX}kitten-dtype`, "fp32");
+}
 const initialKittenDtype = KITTEN_DTYPES.includes(rawKittenDtype) ? rawKittenDtype : "fp32";
 const rawKittenVoice = localStorage.getItem(`${STORAGE_PREFIX}kitten-voice`);
 const KITTEN_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"];
@@ -1277,7 +1291,7 @@ function updateEngineUI() {
     elements.kokoroDtypeRow.hidden = !showKokoro;
     if (elements.kokoroDtypeSelect) elements.kokoroDtypeSelect.value = state.kokoroDtype;
     if (elements.kokoroDtypeNote) {
-      const sizeMap = { fp32: "326 MB", fp16: "163 MB", q8: "92 MB", q8f16: "86 MB", q4: "305 MB", q4f16: "154 MB", uint8: "177 MB", uint8f16: "114 MB" };
+      const sizeMap = { fp32: "326 MB", fp16: "163 MB", q8: "92 MB", q4: "305 MB", q4f16: "154 MB", uint8: "177 MB" };
       elements.kokoroDtypeNote.textContent = `Kokoro 82M · ${state.kokoroDtype} · ${sizeMap[state.kokoroDtype] || ""} · saved as hearwiki:kokoro-dtype. Device=${state.kokoroDevice}.`;
     }
   }
@@ -1364,6 +1378,103 @@ async function refreshStorageLabel() {
     elements.storageUsageLabel.textContent = `Generated audio (IndexedDB) · library & progress (localStorage) · model files (browser cache)${suffix}`;
     if (elements.storageNote) elements.storageNote.textContent = `No text or audio is sent to a server. “Clear generated audio” wipes hearwiki-tts-cache${Number.isFinite(count) && count ? ` (${count} segments)` : ""}. “Clear all” also wipes hearwiki:tts-backend / kokoro-device / neural-voice, library, and progress.`;
   } catch {}
+  refreshModelCacheUI().catch(() => {});
+}
+
+async function refreshModelCacheUI() {
+  const list = elements.modelCacheList;
+  const totalEl = elements.modelCacheTotal;
+  const clearBtn = elements.clearModelCache;
+  if (!list) return;
+  if (typeof caches === "undefined") {
+    list.replaceChildren(Object.assign(document.createElement("span"), { className: "model-cache-empty", textContent: "CacheStorage not available in this browser." }));
+    if (totalEl) totalEl.textContent = "—";
+    if (clearBtn) clearBtn.disabled = true;
+    return;
+  }
+  list.replaceChildren(Object.assign(document.createElement("span"), { className: "model-cache-empty", textContent: "Checking…" }));
+  try {
+    const { available, entries, totalFormatted } = await getModelCacheEntries();
+    if (!available) {
+      list.replaceChildren(Object.assign(document.createElement("span"), { className: "model-cache-empty", textContent: "CacheStorage not available." }));
+      if (totalEl) totalEl.textContent = "—";
+      return;
+    }
+    if (totalEl) totalEl.textContent = entries.length ? `${entries.length} file${entries.length === 1 ? "" : "s"} · ${totalFormatted}` : "0 files";
+    if (clearBtn) clearBtn.disabled = entries.length === 0;
+    if (!entries.length) {
+      list.replaceChildren(Object.assign(document.createElement("span"), { className: "model-cache-empty", textContent: "No saved models yet — pick Kitten or Kokoro and play once to cache." }));
+      return;
+    }
+    list.replaceChildren();
+    const frag = document.createDocumentFragment();
+    for (const entry of entries) {
+      const row = document.createElement("div");
+      row.className = "model-cache-row";
+      const meta = document.createElement("div");
+      meta.className = "model-cache-meta";
+      const name = document.createElement("strong");
+      name.className = "model-cache-name";
+      name.textContent = entry.label;
+      const url = document.createElement("small");
+      url.className = "model-cache-url";
+      url.textContent = `${entry.cacheName} · ${entry.shortUrl} · ${entry.formattedSize}`;
+      url.title = entry.url;
+      meta.append(name, url);
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "text-button small danger model-cache-delete";
+      del.textContent = "Delete";
+      del.setAttribute("aria-label", `Delete ${entry.label}`);
+      del.addEventListener("click", async () => {
+        del.disabled = true;
+        const prev = del.textContent;
+        del.textContent = "…";
+        try {
+          await deleteCacheEntry(entry.cacheName, entry.url);
+          // Reset worker so next play re-fetches cleanly
+          await resetNeuralWorker(new Error("Model cache entry deleted")).catch(() => {});
+          clearNeuralCache();
+          showToast(`${entry.label} removed`);
+          await refreshModelCacheUI();
+          updateEngineUI();
+        } catch (err) {
+          showToast(err.message || "Could not delete");
+          del.disabled = false;
+          del.textContent = prev;
+        }
+      });
+      row.append(meta, del);
+      frag.append(row);
+    }
+    list.append(frag);
+  } catch (err) {
+    list.replaceChildren(Object.assign(document.createElement("span"), { className: "model-cache-empty", textContent: err.message || "Could not read caches." }));
+  }
+}
+
+async function handleClearModelCache() {
+  const btn = elements.clearModelCache;
+  if (btn) btn.disabled = true;
+  if (!confirm("Clear all saved models? This deletes kitten-cache, transformers-cache and kokoro-voices from CacheStorage. Next play will re-download.")) {
+    if (btn) btn.disabled = false;
+    return;
+  }
+  try {
+    await clearAllModelCaches();
+    await resetNeuralWorker(new Error("Model caches cleared")).catch(() => {});
+    clearNeuralCache();
+    showToast("Saved models cleared — next play will re-download");
+    await refreshModelCacheUI();
+    updateEngineUI();
+  } catch (err) {
+    showToast(err.message || "Could not clear saved models");
+  } finally {
+    if (btn) {
+      // re-enable via refresh
+      refreshModelCacheUI().catch(() => { btn.disabled = false; });
+    }
+  }
 }
 
 async function handleClearAudioCache() {
@@ -1391,6 +1502,8 @@ async function handleClearAllData() {
   try {
     await clearTtsCache().catch(() => {});
     await deleteTtsDatabase().catch(() => {});
+    // Clear model caches as well
+    await clearAllModelCaches().catch(() => {});
     // Clear work cache DB
     try {
       indexedDB.deleteDatabase("hear-work-cache");
@@ -1519,6 +1632,12 @@ function legacyEnsureNeuralWorker({ background = false } = {}) {
       // Always keep voice button label up to date even when not showing overlay.
       updateEngineUI();
       if (!state.neuralShowLoading) return;
+      if (message.cached || message.status === "cached") {
+        const pct = Number.isFinite(message.progress) ? Math.round(message.progress) : null;
+        const label = message.file?.includes("voices") ? "voices.npz" : message.file?.includes("onnx") ? "model.onnx" : message.file || "voice model";
+        setNeuralLoading(pct ?? 100, `Loading ${label} [cached · ${backendTag}]${pct !== null ? ` · ${pct}%` : ""}`);
+        return;
+      }
       if (message.status === "download" && message.file?.includes("onnx") && Number.isFinite(message.progress)) {
         setNeuralLoading(message.progress, `Downloading model.onnx [${backendTag}] · ${Math.round(message.progress)}%`);
       } else if (message.status === "download" && message.file?.includes("voices") && Number.isFinite(message.progress)) {
@@ -1537,6 +1656,9 @@ function legacyEnsureNeuralWorker({ background = false } = {}) {
         updateEngineUI();
       } else if (message.status === "initiate" || message.status === "starting") {
         setNeuralLoading(null, "Preparing voice files");
+      } else if (Number.isFinite(message.progress)) {
+        const label = message.file?.includes("voices") ? "voices.npz" : message.file?.includes("onnx") ? "model.onnx" : message.file || "voice files";
+        setNeuralLoading(message.progress, `Loading ${label} [${backendTag}] · ${Math.round(message.progress)}%`);
       }
       return;
     }
@@ -1694,8 +1816,17 @@ function ttsCallbacks() {
       const pct = Number.isFinite(message.progress) ? Math.round(message.progress) : null;
       const file = message.file || "";
       const status = message.status || "";
+      const isCached = message.cached || status === "cached";
       // Detailed: file + percent + backend. Kitten sends "onnx/model.onnx" + "voices" archive;
       // Kokoro sends model files via transformers progress_callback.
+      if (isCached) {
+        const label = file.includes("voices") ? "voices.npz" : file || "voice model";
+        setNeuralLoading(pct ?? 100, `Loading ${label} [cached · ${backendLabel}]${pct !== null ? ` · ${pct}%` : ""}`);
+        if (state.playback === "buffering") {
+          elements.nowSection.textContent = file ? `Loading ${file.split("/").pop()} [cached · ${backendLabel}]` : `Loading voice [cached · ${backendLabel}]`;
+        }
+        return;
+      }
       if (status === "loading") {
         setNeuralLoading(null, `Initializing ${file || backendLabel} — compiling WASM`);
       } else if (status === "ready") {
@@ -2991,6 +3122,8 @@ if (elements.kittenVoiceSelect) {
 }
 if (elements.clearAudioCache) elements.clearAudioCache.addEventListener("click", handleClearAudioCache);
 if (elements.clearAllData) elements.clearAllData.addEventListener("click", handleClearAllData);
+if (elements.refreshModelCache) elements.refreshModelCache.addEventListener("click", refreshModelCacheUI);
+if (elements.clearModelCache) elements.clearModelCache.addEventListener("click", handleClearModelCache);
 // Refresh storage label when sheet opens (cache count may have changed)
 if (elements.voiceSheet) {
   elements.voiceSheet.addEventListener("toggle", () => refreshStorageLabel());

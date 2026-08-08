@@ -87,11 +87,90 @@ async function inflateRaw(bytes) {
   return inflateSync(bytes);
 }
 
+const KITTEN_CACHE_NAME = "kitten-cache";
+
+async function getKittenCache() {
+  try {
+    if (typeof caches === "undefined") return null;
+    return await caches.open(KITTEN_CACHE_NAME);
+  } catch {
+    return null;
+  }
+}
+
+async function tryGetCachedBuffer(url, onProgress, fileLabel) {
+  const cache = await getKittenCache();
+  if (!cache) return null;
+  try {
+    const hit = await cache.match(url);
+    if (hit) {
+      onProgress?.({ status: "cached", file: fileLabel, loaded: 0, total: 0, progress: 0, cached: true });
+      const buf = await hit.arrayBuffer();
+      onProgress?.({ status: "cached", file: fileLabel, loaded: buf.byteLength, total: buf.byteLength, progress: 100, cached: true });
+      return buf;
+    }
+  } catch {}
+  return null;
+}
+
+async function putCachedBuffer(url, buffer, responseHeaders) {
+  const cache = await getKittenCache();
+  if (!cache) return;
+  try {
+    const headers = new Headers(responseHeaders || {});
+    // Preserve content-type if known, ensure cacheable
+    if (!headers.has("content-length")) headers.set("content-length", String(buffer.byteLength));
+    await cache.put(url, new Response(buffer, { headers }));
+  } catch {}
+}
+
 async function loadNpzVoices(url, onProgress) {
   onProgress?.({ status: "progress", file: "voices.npz", loaded: 0, total: 0, progress: 0 });
+  const cached = await tryGetCachedBuffer(url, onProgress, "voices.npz");
+  if (cached) {
+    const bytes = new Uint8Array(cached);
+    const view = new DataView(cached);
+    let endOffset = -1;
+    for (let offset = bytes.length - 22; offset >= 0; offset -= 1) {
+      if (view.getUint32(offset, true) === 0x06054b50) {
+        endOffset = offset;
+        break;
+      }
+    }
+    if (endOffset < 0) throw new Error("Could not read the Kitten voice archive.");
+    const count = view.getUint16(endOffset + 10, true);
+    let directoryOffset = view.getUint32(endOffset + 16, true);
+    const voices = {};
+    for (let index = 0; index < count; index += 1) {
+      if (view.getUint32(directoryOffset, true) !== 0x02014b50) break;
+      const method = view.getUint16(directoryOffset + 10, true);
+      const compressedSize = view.getUint32(directoryOffset + 20, true);
+      const nameLength = view.getUint16(directoryOffset + 28, true);
+      const extraLength = view.getUint16(directoryOffset + 30, true);
+      const commentLength = view.getUint16(directoryOffset + 32, true);
+      const localOffset = view.getUint32(directoryOffset + 42, true);
+      const name = new TextDecoder().decode(bytes.slice(directoryOffset + 46, directoryOffset + 46 + nameLength));
+      if (name.endsWith(".npy")) {
+        const localNameLength = view.getUint16(localOffset + 26, true);
+        const localExtraLength = view.getUint16(localOffset + 28, true);
+        const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+        const compressed = bytes.slice(dataOffset, dataOffset + compressedSize);
+        const file = method === 0 ? compressed : await inflateRaw(compressed);
+        const parsed = parseNpy(file);
+        voices[name.replace(/\.npy$/, "")] = {
+          data: parsed.data,
+          shape: [parsed.shape[0] || 1, parsed.shape[1] || parsed.data.length],
+        };
+      }
+      directoryOffset += 46 + nameLength + extraLength + commentLength;
+    }
+    return voices;
+  }
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Could not download Kitten voices (${response.status}).`);
   const buffer = await response.arrayBuffer();
+  // Persist for next load
+  putCachedBuffer(url, buffer, response.headers).catch(() => {});
   onProgress?.({ status: "progress", file: "voices.npz", loaded: buffer.byteLength, total: buffer.byteLength, progress: 50 });
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -134,11 +213,15 @@ async function loadNpzVoices(url, onProgress) {
 }
 
 async function fetchWithProgress(url, onProgress, fileLabel = "onnx/model.onnx") {
+  // Serve from Cache API if present – reports as cached so UI can say Loading [cached]
+  const cached = await tryGetCachedBuffer(url, onProgress, fileLabel);
+  if (cached) return cached;
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Could not download ${fileLabel} (${response.status}).`);
   const total = Number(response.headers.get("content-length")) || 0;
   if (!response.body) {
     const buf = await response.arrayBuffer();
+    putCachedBuffer(url, buf, response.headers).catch(() => {});
     onProgress?.({ status: "progress", file: fileLabel, loaded: buf.byteLength, total: buf.byteLength, progress: 100 });
     return buf;
   }
@@ -158,6 +241,8 @@ async function fetchWithProgress(url, onProgress, fileLabel = "onnx/model.onnx")
     joined.set(chunk, offset);
     offset += chunk.length;
   }
+  // Persist for next load before reporting final progress
+  putCachedBuffer(url, joined.buffer, response.headers).catch(() => {});
   // Ensure final 100% is reported
   onProgress?.({ status: "progress", file: fileLabel, loaded, total: loaded, progress: 100 });
   return joined.buffer;

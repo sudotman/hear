@@ -18,6 +18,7 @@ function postProgress(progress) {
     status: progress.status,
     file: progress.file || "",
     progress: value,
+    cached: !!progress.cached,
   });
 }
 

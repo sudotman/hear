@@ -2069,6 +2069,120 @@ input[type="range"]::-moz-range-thumb {
   background: rgba(219, 89, 44, 0.06);
 }
 
+.model-cache-manager {
+  display: grid;
+  gap: 10px;
+  padding: 14px 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.model-cache-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-cache-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.model-cache-total {
+  flex: 1;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+.model-cache-head .ghost {
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.model-cache-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.model-cache-empty {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.model-cache-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid rgba(27, 27, 24, 0.12);
+  background: var(--white);
+}
+
+.model-cache-meta {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.model-cache-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-cache-url {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-cache-delete {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+.model-cache-delete.danger {
+  color: var(--accent-deep);
+  border-color: rgba(219, 89, 44, 0.35);
+}
+
+.model-cache-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.model-cache-hint code {
+  font-size: 10px;
+  padding: 1px 4px;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.model-cache-actions {
+  display: grid;
+}
+
 .sheet-actions button,
 .copy-shortcut {
   min-width: 128px;
