@@ -7,7 +7,6 @@ export const KITTEN_MODELS = [
   KITTEN_DEFAULT_MODEL,
   "KittenML/kitten-tts-mini-0.8",
   "KittenML/kitten-tts-micro-0.8",
-  "onnx-community/kitten-tts-nano-0.1-ONNX",
 ];
 export const KITTEN_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"];
 
@@ -24,18 +23,15 @@ const KITTEN_DOWNLOAD_MB = {
   [KITTEN_DEFAULT_MODEL]: 80,
   "KittenML/kitten-tts-mini-0.8": 80,
   "KittenML/kitten-tts-micro-0.8": 50,
-  "onnx-community/kitten-tts-nano-0.1-ONNX": 40,
 };
 
 const KITTEN_MODEL_LABELS = {
-  "onnx-community/kitten-tts-nano-0.1-ONNX": ["Kitten Nano 0.1", "Legacy release"],
   "KittenML/kitten-tts-micro-0.8": ["Kitten Micro 0.8", "Compact · experimental"],
   [KITTEN_DEFAULT_MODEL]: ["Kitten Nano 0.8", "15M · supported default"],
   "KittenML/kitten-tts-mini-0.8": ["Kitten Mini 0.8", "Larger · experimental"],
 };
 
 const sortedKittenModels = [
-  "onnx-community/kitten-tts-nano-0.1-ONNX",
   "KittenML/kitten-tts-micro-0.8",
   KITTEN_DEFAULT_MODEL,
   "KittenML/kitten-tts-mini-0.8",

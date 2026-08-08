@@ -76,7 +76,7 @@ test("keeps neural models idle until explicit download consent", async ({ page }
 
   await page.locator("#voice-button").click();
   const choices = page.locator("#model-options [data-model-choice]");
-  await expect(choices).toHaveCount(12);
+  await expect(choices).toHaveCount(11);
   await expect(choices.first()).toContainText("System voice");
   await page.locator(`[data-model-choice="kitten:onnx-community/KittenTTS-Nano-v0.8-ONNX"]`).click();
   await expect(page.locator("#active-model-label")).toContainText("onnx-community/KittenTTS-Nano-v0.8-ONNX");

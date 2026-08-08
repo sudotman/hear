@@ -1374,6 +1374,8 @@ body.library-open .site-header .header-search {
 
 .article-copy .is-speaking {
   color: var(--ink);
+  content-visibility: visible;
+  contain: none;
   transform: translateX(8px);
 }
 

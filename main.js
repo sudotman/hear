@@ -10,6 +10,7 @@ import {
 } from "./library.js";
 import {
   KITTEN_DTYPES,
+  KITTEN_DEFAULT_MODEL,
   KITTEN_MODELS,
   KITTEN_VOICES,
   KOKORO_DTYPES,
@@ -269,7 +270,12 @@ if (rawKokoroDtype === "q8f16" || rawKokoroDtype === "uint8f16") {
 const _migratedKokoroDtype = localStorage.getItem(`${STORAGE_PREFIX}kokoro-dtype`);
 const initialKokoroDtype = KOKORO_DTYPES.includes(_migratedKokoroDtype) ? _migratedKokoroDtype : KOKORO_DTYPE_DEFAULT;
 const rawKittenModel = localStorage.getItem(`${STORAGE_PREFIX}kitten-model`);
-const initialKittenModel = KITTEN_MODELS.includes(rawKittenModel) ? rawKittenModel : KITTEN_MODELS[0];
+const initialKittenModel = KITTEN_MODELS.includes(rawKittenModel) ? rawKittenModel : KITTEN_DEFAULT_MODEL;
+// The old Nano 0.1 Transformers.js archive is not compatible with Hear's
+// Kitten Nano 0.8 runtime. Move existing installs to the supported layout.
+if (rawKittenModel && rawKittenModel !== initialKittenModel) {
+  localStorage.setItem(`${STORAGE_PREFIX}kitten-model`, initialKittenModel);
+}
 const rawKittenDtype = localStorage.getItem(`${STORAGE_PREFIX}kitten-dtype`);
 // Migration: older installs may have stored fp16/q8/q4 which Kitten Nano 0.8 does not ship
 if (rawKittenDtype && !KITTEN_DTYPES.includes(rawKittenDtype)) {
