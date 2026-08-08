@@ -27,6 +27,7 @@ import { KokoroWebGPU, KokoroWasm, KittenWasm } from "./tts-backends.js";
 import { clearTtsCache, createAudioCacheKey, deleteTtsDatabase, getCachedAudio, getTtsCacheStats, putCachedAudio, requestPersistentStorage } from "./tts-cache.js";
 import { selectLookaheadSegmentIndices, selectNeuralCacheEvictions, shareInFlight } from "./tts-scheduling.js";
 import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
+import { coverProxyPath } from "./cover-policy.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -42,6 +43,11 @@ const elements = {
   epubInput: $("#epub-input"),
   catalogSearch: $("#catalog-search"),
   catalogQuery: $("#catalog-query"),
+  catalogSearchLabel: $("#catalog-search-label"),
+  catalogSubmit: $("#catalog-submit"),
+  catalogSubmitLabel: $("#catalog-submit-label"),
+  discoveryHint: $("#discovery-hint"),
+  searchModes: $$("[data-search-mode]"),
   sourceSwitcher: $("#source-switcher"),
   savedCount: $("#saved-count"),
   catalogTopics: $("#catalog-topics"),
@@ -58,8 +64,6 @@ const elements = {
   continueImage: $("#continue-image"),
   continueProgress: $("#continue-progress"),
   continueLabel: $("#continue-label"),
-  openForm: $("#open-form"),
-  articleQuery: $("#article-query"),
   headerSearch: $("#header-search"),
   headerQuery: $("#header-query"),
   articleTitle: $("#article-title"),
@@ -336,12 +340,11 @@ const state = {
   catalogQuery: "",
   catalogPage: 1,
   catalogItems: [],
+  discoveryMode: "books",
   catalogRequestId: 0,
   catalogAbortController: null,
   contentAbortController: null,
   contentRequestId: 0,
-  artworkAbortController: null,
-  artworkObjectUrl: null,
   lastAnnouncement: "",
   lastAnnouncementAt: 0,
   chapters: [],
@@ -376,7 +379,7 @@ function workLibraryEntry(work) {
     title: work.title,
     author: work.author || (work.kind === "article" ? "Wikipedia" : "Unknown author"),
     description: work.description,
-    image: work.image?.startsWith("data:") ? "" : work.image,
+    image: work.image?.startsWith("data:") ? (work.catalogItem?.image || "") : work.image,
     lang: work.lang,
     catalogItem: work.catalogItem || null,
     savedAt: Date.now(),
@@ -402,17 +405,22 @@ function coverColor(item) {
   return colors[seed % colors.length];
 }
 
-function canDisplayImage(item) {
-  if (!item?.image) return false;
+function displayImageSource(item) {
+  const image = item?.image || item?.catalogItem?.image;
+  if (!image) return "";
   try {
-    const url = new URL(item.image, location.href);
-    // Public cover hosts are inconsistent under WebKit's COOP/COEP enforcement.
-    // Use the designed typographic fallback instead of producing blocked loads.
-    if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) return false;
+    const url = new URL(image, location.href);
+    if (url.protocol === "data:" || url.protocol === "blob:" || url.origin === location.origin) return url.href;
+    const proxyPath = coverProxyPath(url.href);
+    if (proxyPath) return new URL(proxyPath, location.origin).href;
+    return crossOriginIsolated ? "" : url.href;
   } catch {
-    return false;
+    return "";
   }
-  return true;
+}
+
+function canDisplayImage(item) {
+  return Boolean(displayImageSource(item));
 }
 
 function renderBookCard(item, { removable = false } = {}) {
@@ -429,7 +437,7 @@ function renderBookCard(item, { removable = false } = {}) {
   if (canDisplayImage(item)) {
     const image = document.createElement("img");
     image.crossOrigin = "anonymous";
-    image.src = item.image;
+    image.src = displayImageSource(item);
     image.alt = "";
     image.loading = "lazy";
     image.addEventListener("load", () => cover.classList.add("has-image"), { once: true });
@@ -507,7 +515,7 @@ function renderSavedLibrary() {
   elements.loadMore.hidden = true;
 }
 
-function interleave(left, right, limit = 30) {
+function interleave(left, right, limit = 16) {
   const result = [];
   const length = Math.max(left.length, right.length);
   for (let index = 0; index < length && result.length < limit; index += 1) {
@@ -538,12 +546,12 @@ async function loadCatalog({ append = false } = {}) {
   try {
     let items;
     if (state.catalogSource === "standard") {
-      items = await fetchStandardCatalog({ query, page: state.catalogPage, limit: 24, signal: controller.signal });
+      items = await fetchStandardCatalog({ query, page: state.catalogPage, limit: 15, signal: controller.signal });
     } else if (state.catalogSource === "gutenberg") {
-      items = await fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal });
+      items = (await fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal })).slice(0, 15);
     } else {
       const results = await Promise.allSettled([
-        fetchStandardCatalog({ query, page: state.catalogPage, limit: 15, signal: controller.signal }),
+        fetchStandardCatalog({ query, page: state.catalogPage, limit: 8, signal: controller.signal }),
         fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal }),
       ]);
       if (results.every((result) => result.status === "rejected")) throw results[0].reason;
@@ -578,6 +586,26 @@ function chooseCatalogSource(source) {
   loadCatalog();
 }
 
+function setDiscoveryMode(mode, { focus = true } = {}) {
+  state.discoveryMode = mode === "wikipedia" ? "wikipedia" : "books";
+  const isWikipedia = state.discoveryMode === "wikipedia";
+  elements.searchModes.forEach((button) => {
+    const selected = button.dataset.searchMode === state.discoveryMode;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  elements.catalogSearchLabel.textContent = isWikipedia ? "Open a Wikipedia article" : "Search public-domain books";
+  elements.catalogQuery.placeholder = isWikipedia ? "Article title or Wikipedia link" : "Title, author, or subject";
+  elements.catalogSubmit.setAttribute("aria-label", isWikipedia ? "Open Wikipedia article" : "Search public-domain books");
+  elements.catalogSubmitLabel.textContent = isWikipedia ? "Open article" : "Search books";
+  elements.discoveryHint.textContent = isWikipedia
+    ? "Citation numbers, tables, and references are left out of the narration."
+    : "Search Standard Ebooks and Project Gutenberg.";
+  elements.importInlineButton.hidden = isWikipedia;
+  elements.setupButton.hidden = !isWikipedia;
+  if (focus) elements.catalogQuery.focus();
+}
+
 function updateContinueListening() {
   const progress = Object.values(progressEntries()).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   const entry = progress && libraryEntries().find((item) => item.key === progress.key);
@@ -595,7 +623,7 @@ function updateContinueListening() {
   elements.continueLabel.textContent = `${Math.round(ratio * 100)}% listened · resume`;
   const fallback = $("i", elements.continueCover);
   if (canDisplayImage(entry)) {
-    elements.continueImage.src = entry.image;
+    elements.continueImage.src = displayImageSource(entry);
     elements.continueImage.hidden = false;
     fallback.hidden = true;
   } else {
@@ -1224,31 +1252,11 @@ function showArtworkFallback(article) {
   $("span", elements.miniCover).textContent = article.title[0]?.toUpperCase() || "W";
 }
 
-async function renderArticleArtwork(article) {
-  state.artworkAbortController?.abort();
-  if (state.artworkObjectUrl) URL.revokeObjectURL(state.artworkObjectUrl);
-  state.artworkObjectUrl = null;
+function renderArticleArtwork(article) {
   showArtworkFallback(article);
-  if (!article.image || article.source === "standard") return;
-  if (crossOriginIsolated && /^https?:/i.test(article.image)) return;
-
-  const controller = new AbortController();
-  state.artworkAbortController = controller;
-  let source = article.image;
+  const source = displayImageSource(article);
+  if (!source) return;
   try {
-    const url = new URL(source, location.href);
-    if (/^https?:$/.test(url.protocol) && url.origin !== location.origin) {
-      // Fetch as CORS, then display a same-origin blob URL in browsers that
-      // permit it under COEP, while preserving Wikimedia attribution.
-      const response = await fetchWithTimeout(url, { mode: "cors", signal: controller.signal }, 15_000);
-      if (!response.ok) throw new Error("Artwork unavailable");
-      source = URL.createObjectURL(await response.blob());
-    }
-    if (controller.signal.aborted || state.article?.key !== article.key) {
-      if (source.startsWith("blob:")) URL.revokeObjectURL(source);
-      return;
-    }
-    if (source.startsWith("blob:")) state.artworkObjectUrl = source;
     elements.articleImage.src = source;
     elements.articleImage.alt = article.kind === "book" ? `Cover of ${article.title}` : `Lead image for ${article.title}`;
     elements.imageCaption.textContent = article.kind === "book"
@@ -1262,8 +1270,6 @@ async function renderArticleArtwork(article) {
     updateMediaMetadata();
   } catch (error) {
     if (!isAbortError(error)) showArtworkFallback(article);
-  } finally {
-    if (state.artworkAbortController === controller) state.artworkAbortController = null;
   }
 }
 
@@ -2383,12 +2389,13 @@ async function playNeuralFromChunk(chunkIndex, targetWord = null) {
     elements.mediaAudio.loop = false;
     elements.mediaAudio.muted = false;
     elements.mediaAudio.volume = 1;
-    elements.mediaAudio.playbackRate = state.rate;
+    applyMediaPlaybackRate();
     elements.mediaAudio.dataset.mode = "article";
     elements.mediaAudio.src = audio.url;
     const metadataReady = waitForAudioMetadata(elements.mediaAudio);
     elements.mediaAudio.load();
     await metadataReady;
+    applyMediaPlaybackRate();
 
     if (targetWord !== null && Number.isFinite(elements.mediaAudio.duration)) {
       const ratio = Math.min(1, Math.max(0, (targetWord - segment.startWord) / segment.wordCount));
@@ -2530,6 +2537,11 @@ function applyVoiceToUtterance(utterance) {
   utterance.volume = 1;
 }
 
+function applyMediaPlaybackRate() {
+  elements.mediaAudio.defaultPlaybackRate = state.rate;
+  elements.mediaAudio.playbackRate = state.rate;
+}
+
 function startSpeechAt(index) {
   if (!supportsSpeech || !state.chunks.length) {
     showToast("Speech playback isn’t available in this browser.");
@@ -2626,7 +2638,7 @@ function togglePlayback() {
       return;
     }
     if (state.playback === "paused" && !elements.mediaAudio.ended && elements.mediaAudio.src && state.currentAudioUrl === elements.mediaAudio.src) {
-      elements.mediaAudio.playbackRate = state.rate;
+      applyMediaPlaybackRate();
       elements.mediaAudio.play().then(() => {
         setPlaybackState("playing");
         resumeNeuralBuffering();
@@ -2885,11 +2897,10 @@ function setRate(nextRate, restartSpeech = true) {
     renderChapters(state.article);
   }
 
-  if (state.engine === "neural") {
-    elements.mediaAudio.playbackRate = state.rate;
-  } else if (restartSpeech && state.playback === "playing") {
+  applyMediaPlaybackRate();
+  if (state.engine !== "neural" && restartSpeech && state.playback === "playing") {
     startSpeechAt(state.currentIndex);
-  } else if (restartSpeech && state.playback === "paused") {
+  } else if (state.engine !== "neural" && restartSpeech && state.playback === "paused") {
     stopSpeech("paused");
   }
 }
@@ -2974,7 +2985,7 @@ function setBookmarklet() {
 
 function updateMediaMetadata() {
   if (!("mediaSession" in navigator) || !("MediaMetadata" in window) || !state.article) return;
-  const artworkSource = state.artworkObjectUrl || (canDisplayImage(state.article) ? state.article.image : "");
+  const artworkSource = displayImageSource(state.article);
   const artwork = artworkSource
     ? [{ src: artworkSource }]
     : [];
@@ -3091,8 +3102,8 @@ async function previewNaturalVoice() {
       elements.mediaAudio.loop = false;
       elements.mediaAudio.muted = false;
       elements.mediaAudio.volume = 1;
-      elements.mediaAudio.playbackRate = state.rate;
       elements.mediaAudio.src = entry.url;
+      applyMediaPlaybackRate();
       await elements.mediaAudio.play();
       setPlaybackState("playing");
     } catch {
@@ -3122,6 +3133,10 @@ elements.continueButton.addEventListener("click", () => {
 
 elements.catalogSearch.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (state.discoveryMode === "wikipedia") {
+    loadArticle(elements.catalogQuery.value);
+    return;
+  }
   state.catalogQuery = elements.catalogQuery.value;
   if (state.catalogSource === "saved") state.catalogSource = "all";
   $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
@@ -3132,12 +3147,25 @@ elements.catalogSearch.addEventListener("submit", (event) => {
   elements.catalogTitle.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
+elements.searchModes.forEach((button) => {
+  button.addEventListener("click", () => setDiscoveryMode(button.dataset.searchMode));
+  button.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setDiscoveryMode(button.dataset.searchMode === "books" ? "wikipedia" : "books");
+  });
+});
+
 $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
-  button.addEventListener("click", () => chooseCatalogSource(button.dataset.source));
+  button.addEventListener("click", () => {
+    setDiscoveryMode("books", { focus: false });
+    chooseCatalogSource(button.dataset.source);
+  });
 });
 
 $$('button[data-topic]', elements.catalogTopics).forEach((button) => {
   button.addEventListener("click", () => {
+    setDiscoveryMode("books", { focus: false });
     state.catalogQuery = button.dataset.topic;
     elements.catalogQuery.value = button.dataset.topic;
     if (state.catalogSource === "saved") state.catalogSource = "all";
@@ -3154,11 +3182,6 @@ $$('button[data-topic]', elements.catalogTopics).forEach((button) => {
 elements.loadMore.addEventListener("click", () => {
   state.catalogPage += 1;
   loadCatalog({ append: true });
-});
-
-elements.openForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  loadArticle(elements.articleQuery.value);
 });
 
 elements.headerSearch.addEventListener("submit", (event) => {
@@ -3302,6 +3325,8 @@ elements.mediaAudio.addEventListener("timeupdate", () => {
     savePosition();
   }
 });
+
+elements.mediaAudio.addEventListener("loadedmetadata", applyMediaPlaybackRate);
 
 elements.mediaAudio.addEventListener("ended", () => {
   if (elements.mediaAudio.dataset.mode === "preview") {
@@ -3453,6 +3478,7 @@ setBookmarklet();
 loadVoices();
 initMediaSession();
 elements.libraryButton.hidden = true;
+setDiscoveryMode("books", { focus: false });
 updateContinueListening();
 
 async function resolveCurrentRoute({ historyMode = "none", routeState = history.state } = {}) {

@@ -19,6 +19,10 @@ async function mockWikipedia(page) {
 }
 
 async function mockGutenbergBook(page) {
+  const coverBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
   await page.route("https://gutendex.com/books/1727/", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
@@ -27,8 +31,12 @@ async function mockGutenbergBook(page) {
       authors: [{ name: "Homer" }],
       summaries: ["An ancient voyage home."],
       languages: ["en"],
-      formats: {},
+      formats: { "image/jpeg": "https://www.gutenberg.org/cache/epub/1727/pg1727.cover.medium.jpg" },
     }),
+  }));
+  await page.route(/\/cover\?url=/, (route) => route.fulfill({
+    contentType: "image/png",
+    body: coverBytes,
   }));
   await page.route("https://api.github.com/search/repositories**", (route) => route.fulfill({
     contentType: "application/json",
@@ -99,8 +107,44 @@ test("opens a Gutenberg book without requesting browser-blocked OPDS metadata", 
   await page.goto("/?source=gutenberg&book=1727");
 
   await expect(page.getByRole("heading", { name: "The Odyssey", level: 1 })).toBeVisible();
+  await expect(page.locator("#article-image")).toBeVisible();
+  await expect(page.locator("#article-image")).toHaveAttribute("src", /\/cover\?url=/);
   await expect(page.locator("#source-link")).toHaveAttribute("href", "https://www.gutenberg.org/ebooks/1727");
   expect(opdsRequests).toEqual([]);
+});
+
+test("makes books and Wikipedia obvious from the homepage and displays catalog covers", async ({ page }) => {
+  await mockGutenbergBook(page);
+  await page.route("https://standardebooks.org/ebooks**", (route) => route.fulfill({
+    contentType: "text/html",
+    body: '<div class="ebooks-list"></div>',
+  }));
+  await page.route("https://gutendex.com/books/?**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      results: [{
+        id: 1727,
+        title: "The Odyssey",
+        authors: [{ name: "Homer" }],
+        summaries: ["An ancient voyage home."],
+        languages: ["en"],
+        formats: { "image/jpeg": "https://www.gutenberg.org/cache/epub/1727/pg1727.cover.medium.jpg" },
+      }],
+    }),
+  }));
+
+  await page.goto("/");
+  await expect(page.getByRole("tab", { name: "Books" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Open The Odyssey by Homer" }).locator("img")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Wikipedia" }).click();
+  await expect(page.getByRole("searchbox", { name: "Open a Wikipedia article" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add the Wikipedia shortcut" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Books" }).click();
+  await page.getByRole("button", { name: "Open The Odyssey by Homer" }).click();
+  await expect(page.getByRole("heading", { name: "The Odyssey", level: 1 })).toBeVisible();
+  await expect(page.locator("#article-image")).toBeVisible();
 });
 
 test("browser Back restores the reader after visiting the library", async ({ page }) => {
@@ -111,6 +155,29 @@ test("browser Back restores the reader after visiting the library", async ({ pag
   await page.goBack();
   await expect(page.locator("#reader")).toBeVisible();
   await expect(page).toHaveURL(/title=Test/);
+});
+
+test("reapplies the saved speaking rate after reloads and new audio resources", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("hearwiki:rate", "1.3");
+  });
+  await page.goto("/?lang=en&title=Test%20Work");
+
+  await expect(page.locator("#rate-button")).toHaveText("1.3×");
+  await expect.poll(() => page.locator("#media-audio").evaluate((audio) => ({
+    defaultRate: audio.defaultPlaybackRate,
+    rate: audio.playbackRate,
+  }))).toEqual({ defaultRate: 1.3, rate: 1.3 });
+
+  await page.locator("#media-audio").evaluate((audio) => {
+    audio.defaultPlaybackRate = 1;
+    audio.playbackRate = 1;
+    audio.dispatchEvent(new Event("loadedmetadata"));
+  });
+  await expect.poll(() => page.locator("#media-audio").evaluate((audio) => ({
+    defaultRate: audio.defaultPlaybackRate,
+    rate: audio.playbackRate,
+  }))).toEqual({ defaultRate: 1.3, rate: 1.3 });
 });
 
 test("mobile player controls meet a 44px touch target", async ({ page }, testInfo) => {

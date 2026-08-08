@@ -423,6 +423,7 @@ async function fetchGutenbergDetails(id, { signal } = {}) {
     title: item.title,
     author: item.author,
     description: item.description,
+    image: item.image,
     lang: item.language,
   };
 }
@@ -587,7 +588,7 @@ export async function loadGutenbergWork(item, onStatus = () => {}, { signal } = 
     title: details?.title || item.title,
     author: details?.author || item.author,
     description: details?.description || item.description,
-    image: "",
+    image: details?.image || item.image || "",
     source: "gutenberg",
     sourceLabel: "Project Gutenberg",
     sourceUrl: `${GUTENBERG_ORIGIN}/ebooks/${id}`,

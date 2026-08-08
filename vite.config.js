@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
+import { allowedCoverUrl } from "./cover-policy.js";
 
 // Vite plugin to ensure WebKit compatibility: phonemizer's bundled
 // espeak-ng data loader uses `for await (const x of readableStream)`
@@ -31,8 +32,50 @@ function webkitReadableStreamPatch() {
   };
 }
 
+function localCoverProxy() {
+  return {
+    name: "hear-local-cover-proxy",
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        const requestUrl = new URL(request.url || "/", "http://localhost");
+        if (requestUrl.pathname !== "/cover") {
+          next();
+          return;
+        }
+        const source = allowedCoverUrl(requestUrl.searchParams.get("url"));
+        if (!source) {
+          response.statusCode = 400;
+          response.end("Cover URL not allowed");
+          return;
+        }
+        try {
+          const upstream = await fetch(source, {
+            headers: { Accept: "image/avif,image/webp,image/svg+xml,image/*,*/*;q=0.8" },
+          });
+          const type = upstream.headers.get("content-type") || "";
+          if (!upstream.ok || !allowedCoverUrl(upstream.url) || !type.toLowerCase().startsWith("image/")) {
+            response.statusCode = 502;
+            response.end("Cover unavailable");
+            return;
+          }
+          const bytes = Buffer.from(await upstream.arrayBuffer());
+          response.statusCode = 200;
+          response.setHeader("Cache-Control", "public, max-age=86400");
+          response.setHeader("Content-Type", type);
+          response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+          response.setHeader("X-Content-Type-Options", "nosniff");
+          response.end(bytes);
+        } catch {
+          response.statusCode = 502;
+          response.end("Cover unavailable");
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [webkitReadableStreamPatch()],
+  plugins: [webkitReadableStreamPatch(), localCoverProxy()],
   base: "./",
   server: {
     headers: {

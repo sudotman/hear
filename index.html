@@ -54,52 +54,45 @@
       <section class="start-view library-view" id="start-view" aria-labelledby="start-title">
         <div class="library-hero">
           <div class="library-hero-copy">
-            <h1 id="start-title">All things written, <br /><em>spoken.</em></h1>
+            <p class="eyebrow">Private listening, on this device</p>
+            <h1 id="start-title">Books and articles, <em>spoken.</em></h1>
             <p class="start-deck">
-              Discover enduring books, bring your own EPUBs, or open a Wikipedia article. Your voice, books, and place stay on this device.
+              Find a public-domain book, open anything on Wikipedia, or bring your own EPUB.
             </p>
 
+            <div class="search-mode" role="tablist" aria-label="Choose what to search">
+              <button type="button" role="tab" data-search-mode="books" aria-selected="true" aria-controls="catalog-search">Books</button>
+              <button type="button" role="tab" data-search-mode="wikipedia" aria-selected="false" aria-controls="catalog-search" tabindex="-1">Wikipedia</button>
+            </div>
+
             <form class="catalog-search" id="catalog-search" role="search">
-              <label class="sr-only" for="catalog-query">Search public-domain books</label>
-              <input id="catalog-query" type="search" autocomplete="off" placeholder="Search by title, author, or subject" />
-              <button type="submit" aria-label="Find a public-domain book">
-                <span>Find a book</span>
+              <label class="sr-only" id="catalog-search-label" for="catalog-query">Search public-domain books</label>
+              <input id="catalog-query" type="search" autocomplete="off" spellcheck="false" placeholder="Title, author, or subject" required />
+              <button type="submit" id="catalog-submit" aria-label="Search public-domain books">
+                <span id="catalog-submit-label">Search books</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
               </button>
             </form>
 
-            <div class="source-switcher" id="source-switcher" role="group" aria-label="Book source">
-              <button type="button" data-source="all" aria-pressed="true">All libraries</button>
-              <button type="button" data-source="standard" aria-pressed="false">Standard Ebooks</button>
-              <button type="button" data-source="gutenberg" aria-pressed="false">Project Gutenberg</button>
-              <button type="button" data-source="saved" aria-pressed="false">My library <span id="saved-count">0</span></button>
+            <div class="discovery-note">
+              <p id="discovery-hint">Search Standard Ebooks and Project Gutenberg.</p>
+              <button type="button" id="import-inline-button">Import an EPUB <span>↗</span></button>
+              <button type="button" id="setup-button" hidden>Add the Wikipedia shortcut <span>↗</span></button>
             </div>
-          </div>
 
-          <aside class="continue-listening" id="continue-listening" aria-labelledby="continue-title" hidden>
-            <p class="eyebrow">Continue listening</p>
-            <button type="button" id="continue-button">
-              <span class="continue-cover" id="continue-cover"><i>H</i><img id="continue-image" alt="" crossorigin="anonymous" hidden /></span>
-              <span class="continue-copy">
-                <strong id="continue-title">Your last book</strong>
-                <small id="continue-author">Ready when you are</small>
-                <span class="continue-track"><i id="continue-progress"></i></span>
-                <span id="continue-label">Resume</span>
-              </span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5V7Z" /></svg>
-            </button>
-          </aside>
-
-          <div class="library-motif" aria-hidden="true">
-            <div class="edition-note"><span>∞</span> open source, free, private! &lt;3 </div>
-            <div class="sound-sculpture">
-              <span style="--h: 22%; --d: 0ms"></span><span style="--h: 44%; --d: 80ms"></span>
-              <span style="--h: 76%; --d: 160ms"></span><span style="--h: 36%; --d: 240ms"></span>
-              <span style="--h: 92%; --d: 320ms"></span><span style="--h: 58%; --d: 400ms"></span>
-              <span style="--h: 30%; --d: 480ms"></span><span style="--h: 70%; --d: 560ms"></span>
-              <span style="--h: 48%; --d: 640ms"></span><span style="--h: 84%; --d: 720ms"></span>
-              <span style="--h: 28%; --d: 800ms"></span><span style="--h: 52%; --d: 880ms"></span>
-            </div>
+            <aside class="continue-listening" id="continue-listening" aria-labelledby="continue-title" hidden>
+              <p class="eyebrow">Continue listening</p>
+              <button type="button" id="continue-button">
+                <span class="continue-cover" id="continue-cover"><i>H</i><img id="continue-image" alt="" crossorigin="anonymous" hidden /></span>
+                <span class="continue-copy">
+                  <strong id="continue-title">Your last book</strong>
+                  <small id="continue-author">Ready when you are</small>
+                  <span class="continue-track"><i id="continue-progress"></i></span>
+                  <span id="continue-label">Resume</span>
+                </span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5V7Z" /></svg>
+              </button>
+            </aside>
           </div>
         </div>
 
@@ -109,44 +102,24 @@
               <p class="eyebrow" id="catalog-eyebrow">Open shelves</p>
               <h2 id="catalog-title">Books worth hearing</h2>
             </div>
-            <div class="catalog-topics" id="catalog-topics" aria-label="Browse a collection">
-              <button type="button" data-topic="" aria-pressed="true">Popular</button>
-              <button type="button" data-topic="fiction" aria-pressed="false">Fiction</button>
-              <button type="button" data-topic="short stories" aria-pressed="false">Short stories</button>
-              <button type="button" data-topic="philosophy" aria-pressed="false">Ideas</button>
+            <div class="catalog-controls">
+              <div class="source-switcher" id="source-switcher" role="group" aria-label="Book source">
+                <button type="button" data-source="all" aria-pressed="true">All</button>
+                <button type="button" data-source="standard" aria-pressed="false">Standard Ebooks</button>
+                <button type="button" data-source="gutenberg" aria-pressed="false">Gutenberg</button>
+                <button type="button" data-source="saved" aria-pressed="false">My library <span id="saved-count">0</span></button>
+              </div>
+              <div class="catalog-topics" id="catalog-topics" aria-label="Browse a collection">
+                <button type="button" data-topic="" aria-pressed="true">Popular</button>
+                <button type="button" data-topic="fiction" aria-pressed="false">Fiction</button>
+                <button type="button" data-topic="short stories" aria-pressed="false">Short stories</button>
+                <button type="button" data-topic="philosophy" aria-pressed="false">Ideas</button>
+              </div>
             </div>
           </header>
           <p class="catalog-status" id="catalog-status" role="status" aria-live="polite">Opening the shelves…</p>
           <div class="book-grid" id="book-grid"></div>
           <button class="load-more" id="load-more" type="button" hidden>Browse more books</button>
-        </section>
-
-        <section class="bring-your-own" id="import" aria-labelledby="import-title">
-          <div>
-      
-            <h2 id="import-title">Bring any open EPUB.</h2>
-          </div>
-          <div class="import-copy">
-            <p>Hear finds the title, cover, reading order, and chapters automatically. The book stays in this browser for a private, one-tap return.</p>
-            <button type="button" id="import-inline-button">Choose an EPUB <span>↗</span></button>
-            <small>DRM-free EPUB 2 and EPUB 3 files are supported.</small>
-          </div>
-        </section>
-
-        <section class="article-lane" aria-labelledby="article-lane-title">
-          <div>
-
-            <h2 id="article-lane-title">Articles from Wikipedia!</h2>
-            <p>Open any Wikipedia page as clean listening copy, without citation numbers, tables, or references in the narration.</p>
-          </div>
-          <form class="open-form" id="open-form" role="search">
-            <label for="article-query">Wikipedia link or article title</label>
-            <div class="open-field">
-              <input id="article-query" name="article" autocomplete="off" spellcheck="false" placeholder="en.wikipedia.org/wiki/…" required />
-              <button type="submit" aria-label="Open Wikipedia article"><span>Open article</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg></button>
-            </div>
-            <button class="shortcut-link" id="setup-button" type="button">Add the Hear shortcut</button>
-          </form>
         </section>
 
         <footer class="library-footer">
