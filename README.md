@@ -9,7 +9,7 @@ hear is a private, browser-based listening library for wikipedia articles, publi
 - browse standard ebooks and project gutenberg catalogs
 - open wikipedia articles without citation markers, references, tables, or navigation furniture in the narration
 - import epub 2 and epub 3 files, including metadata, covers, reading order, chapters, lists, and table-based dramatic dialogue
-- save works to my library and continue the most recent work
+- save works to my library and continue up to four recent works
 - navigate by chapter, seek through a work, change playback speed, skip 15 seconds, and resume saved progress
 - use media session controls and a real `<audio>` element for natural-voice playback on iphone control center and the lock screen
 

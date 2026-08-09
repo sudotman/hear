@@ -57,16 +57,13 @@ const elements = {
   catalogEyebrow: $("#catalog-eyebrow"),
   catalogTitle: $("#catalog-title"),
   catalogStatus: $("#catalog-status"),
+  catalogProgress: $("#catalog-progress"),
+  catalogProgressBar: $("#catalog-progress-bar"),
+  catalogProgressLabel: $("#catalog-progress-label"),
   bookGrid: $("#book-grid"),
   loadMore: $("#load-more"),
   continueListening: $("#continue-listening"),
-  continueButton: $("#continue-button"),
-  continueTitle: $("#continue-title"),
-  continueAuthor: $("#continue-author"),
-  continueCover: $("#continue-cover"),
-  continueImage: $("#continue-image"),
-  continueProgress: $("#continue-progress"),
-  continueLabel: $("#continue-label"),
+  continueList: $("#continue-list"),
   headerSearch: $("#header-search"),
   headerQuery: $("#header-query"),
   articleTitle: $("#article-title"),
@@ -162,6 +159,14 @@ const WORDS_PER_MINUTE = 185;
 const STORAGE_PREFIX = "hearwiki:";
 const LIBRARY_KEY = `${STORAGE_PREFIX}library-v2`;
 const PROGRESS_KEY = `${STORAGE_PREFIX}progress-v2`;
+const CATALOG_TOPICS = {
+  fiction: { label: "Fiction", standard: "fiction", gutenberg: "fiction" },
+  adventure: { label: "Adventure", standard: "adventure", gutenberg: "adventure" },
+  mystery: { label: "Mystery", standard: "mystery", gutenberg: "mystery" },
+  "short-stories": { label: "Short stories", standard: "shorts", gutenberg: "short stories" },
+  philosophy: { label: "Ideas", standard: "philosophy", gutenberg: "philosophy" },
+  poetry: { label: "Poetry", standard: "poetry", gutenberg: "poetry" },
+};
 const TTS_APP_VERSION = "2026.08.06";
 const NATURAL_VOICES = {
   af_heart: { name: "Heart", note: "Warm, balanced American voice · the strongest all-round choice" },
@@ -342,6 +347,7 @@ const state = {
   isSeeking: false,
   catalogSource: "all",
   catalogQuery: "",
+  catalogTopic: "",
   catalogPage: 1,
   catalogItems: [],
   discoveryMode: "books",
@@ -548,6 +554,8 @@ function renderSavedLibrary() {
   const entries = libraryEntries();
   state.catalogItems = entries;
   elements.savedCount.textContent = String(entries.length);
+  elements.catalogProgress.hidden = true;
+  elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
   elements.catalogEyebrow.textContent = "Saved on this device";
   elements.catalogTitle.textContent = "My listening library";
   elements.catalogStatus.textContent = entries.length
@@ -557,7 +565,7 @@ function renderSavedLibrary() {
   elements.loadMore.hidden = true;
 }
 
-function interleave(left, right, limit = 16) {
+function interleave(left, right, limit = 30) {
   const result = [];
   const length = Math.max(left.length, right.length);
   for (let index = 0; index < length && result.length < limit; index += 1) {
@@ -565,6 +573,72 @@ function interleave(left, right, limit = 16) {
     if (right[index] && result.length < limit) result.push(right[index]);
   }
   return result;
+}
+
+function normalizeCatalogText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function catalogMatchScore(item, query) {
+  const needle = normalizeCatalogText(query);
+  if (!needle) return 0;
+  const title = normalizeCatalogText(item.title);
+  const author = normalizeCatalogText(item.author);
+  const titleAndAuthor = `${title} ${author}`.trim();
+  const categories = normalizeCatalogText(item.categories?.join(" "));
+  const description = normalizeCatalogText(item.description);
+  const tokens = needle.split(" ").filter(Boolean);
+  let score = item.source === "standard" ? 12 : 0;
+  if (titleAndAuthor === needle) score += 1800;
+  else if (titleAndAuthor.startsWith(needle)) score += 1100;
+  if (title === needle) score += 1200;
+  else if (title.startsWith(needle)) score += 850;
+  else if (title.includes(needle)) score += 650;
+  if (author === needle) score += 900;
+  else if (author.includes(needle)) score += 600;
+  if (categories.includes(needle)) score += 420;
+  tokens.forEach((token) => {
+    if (title.split(" ").includes(token)) score += 90;
+    else if (title.includes(token)) score += 45;
+    if (author.split(" ").includes(token)) score += 65;
+    else if (author.includes(token)) score += 30;
+    if (categories.includes(token)) score += 22;
+    if (description.includes(token)) score += 6;
+  });
+  return score;
+}
+
+function catalogIdentity(item) {
+  return `${normalizeCatalogText(item.title)}|${normalizeCatalogText(item.author)}`;
+}
+
+function prepareCatalogItems(standard, gutenberg, query, limit = 30) {
+  const candidates = query
+    ? [...standard, ...gutenberg]
+        .map((item, index) => ({ item, index, score: catalogMatchScore(item, query) }))
+        .sort((left, right) => right.score - left.score || left.index - right.index)
+        .map(({ item }) => item)
+    : interleave(standard, gutenberg, limit * 2);
+  const editions = new Map();
+  candidates.forEach((item) => {
+    const identity = catalogIdentity(item);
+    const current = editions.get(identity);
+    if (!current || (item.source === "standard" && current.source !== "standard")) editions.set(identity, item);
+  });
+  return [...editions.values()].slice(0, limit);
+}
+
+function setCatalogProgress(completed, total, label) {
+  const safeTotal = Math.max(1, total);
+  elements.catalogProgress.hidden = false;
+  elements.catalogProgressBar.value = Math.round((completed / safeTotal) * 100);
+  elements.catalogProgressLabel.textContent = label;
+  elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", String(completed < safeTotal));
 }
 
 async function loadCatalog({ append = false } = {}) {
@@ -581,39 +655,97 @@ async function loadCatalog({ append = false } = {}) {
     state.catalogPage = 1;
     elements.bookGrid.replaceChildren();
   }
-  elements.catalogStatus.textContent = "Opening the shelves…";
-  elements.loadMore.hidden = true;
   const query = state.catalogQuery.trim();
+  const topic = CATALOG_TOPICS[state.catalogTopic] || null;
+  const searching = Boolean(query);
+  const standardUnits = state.catalogSource === "gutenberg" ? 0 : 1;
+  const gutenbergUnits = state.catalogSource === "standard" ? 0 : (searching && !topic ? 2 : 1);
+  const totalUnits = standardUnits + gutenbergUnits;
+  let completedUnits = 0;
+  let reportedGutenbergUnits = 0;
+  const results = { standard: [], gutenberg: [] };
+  const failures = [];
+  const progressAction = searching ? `Searching for “${query}”` : topic ? `Browsing ${topic.label}` : "Browsing popular books";
+  const updateProgress = (units, label) => {
+    if (requestId !== state.catalogRequestId) return;
+    completedUnits = Math.min(totalUnits, completedUnits + units);
+    setCatalogProgress(completedUnits, totalUnits, label);
+    elements.catalogStatus.textContent = `${progressAction} · ${completedUnits} of ${totalUnits} catalog checks complete`;
+  };
+  const previewResults = () => {
+    if (append || requestId !== state.catalogRequestId) return;
+    const preview = prepareCatalogItems(results.standard, results.gutenberg, query);
+    if (preview.length) renderCatalogItems(preview);
+  };
+  elements.catalogStatus.textContent = `${progressAction}…`;
+  setCatalogProgress(0, totalUnits, "Starting catalog search");
+  elements.loadMore.hidden = true;
 
   try {
-    let items;
-    if (state.catalogSource === "standard") {
-      items = await fetchStandardCatalog({ query, page: state.catalogPage, limit: 15, signal: controller.signal });
-    } else if (state.catalogSource === "gutenberg") {
-      items = (await fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal })).slice(0, 15);
-    } else {
-      const results = await Promise.allSettled([
-        fetchStandardCatalog({ query, page: state.catalogPage, limit: 8, signal: controller.signal }),
-        fetchGutenbergCatalog({ query, page: state.catalogPage, signal: controller.signal }),
-      ]);
-      if (results.every((result) => result.status === "rejected")) throw results[0].reason;
-      const standard = results[0].status === "fulfilled" ? results[0].value : [];
-      const gutenberg = results[1].status === "fulfilled" ? results[1].value : [];
-      items = interleave(standard, gutenberg);
+    const tasks = [];
+    if (standardUnits) {
+      tasks.push(fetchStandardCatalog({
+        query,
+        topic: topic?.standard || "",
+        page: state.catalogPage,
+        limit: 18,
+        signal: controller.signal,
+      }).then((items) => {
+        results.standard = items;
+        updateProgress(1, "Standard Ebooks checked");
+        previewResults();
+      }).catch((error) => {
+        updateProgress(1, "Standard Ebooks could not be reached");
+        failures.push({ source: "Standard Ebooks", error });
+      }));
     }
+    if (gutenbergUnits) {
+      tasks.push(fetchGutenbergCatalog({
+        query,
+        topic: topic?.gutenberg || "",
+        page: state.catalogPage,
+        signal: controller.signal,
+        onProgress: ({ completed }) => {
+          const delta = completed - reportedGutenbergUnits;
+          reportedGutenbergUnits = completed;
+          updateProgress(delta, completed < gutenbergUnits
+            ? "Project Gutenberg titles and authors checked"
+            : "Project Gutenberg subjects checked");
+        },
+      }).then((items) => {
+        results.gutenberg = items;
+        previewResults();
+      }).catch((error) => {
+        failures.push({ source: "Project Gutenberg", error });
+      }));
+    }
+    await Promise.all(tasks);
     if (requestId !== state.catalogRequestId) return;
+    if (failures.length === (standardUnits ? 1 : 0) + (gutenbergUnits ? 1 : 0)) throw failures[0].error;
+    let items = prepareCatalogItems(results.standard, results.gutenberg, query);
+    const existingIds = new Set(append ? state.catalogItems.map((item) => item.id || item.key) : []);
+    items = items.filter((item) => !existingIds.has(item.id || item.key));
     state.catalogItems = append ? [...state.catalogItems, ...items] : items;
     renderCatalogItems(items, { append });
-    elements.catalogEyebrow.textContent = query ? "Search results" : "Open shelves";
-    elements.catalogTitle.textContent = query ? `Books for “${query}”` : "Books worth hearing";
-    elements.catalogStatus.textContent = items.length
-      ? `${append ? "More from" : "Browse"} ${state.catalogSource === "all" ? "Standard Ebooks and Project Gutenberg" : items[0]?.sourceLabel}`
-      : "No matching books were found. Try a title, author, or broader subject.";
-    elements.loadMore.hidden = items.length < 10;
+    elements.catalogEyebrow.textContent = query ? "Search results" : topic ? "Browse by subject" : "Open shelves";
+    elements.catalogTitle.textContent = query ? `Books for “${query}”` : topic ? topic.label : "Books worth hearing";
+    const sourceSummary = state.catalogSource === "all"
+      ? "Standard Ebooks and Project Gutenberg"
+      : state.catalogSource === "standard" ? "Standard Ebooks" : "Project Gutenberg";
+    const failureNote = failures.length ? ` · ${failures.map((failure) => failure.source).join(" and ")} unavailable` : "";
+    elements.catalogStatus.textContent = state.catalogItems.length
+      ? `${state.catalogItems.length} listenable ${state.catalogItems.length === 1 ? "edition" : "editions"} from ${sourceSummary}${failureNote}`
+      : query
+        ? `No downloadable public-domain edition matched “${query}”. Try a shorter title, the author’s name, or import an EPUB you own.`
+        : `No books were found in ${topic?.label || "this collection"}.`;
+    setCatalogProgress(totalUnits, totalUnits, `${totalUnits} catalog ${totalUnits === 1 ? "check" : "checks"} complete`);
+    elements.loadMore.hidden = items.length < (state.catalogSource === "standard" ? 18 : 20);
   } catch (error) {
     if (requestId !== state.catalogRequestId) return;
     if (isAbortError(error)) return;
     elements.catalogStatus.textContent = error.message || "The public libraries could not be reached.";
+    elements.catalogProgress.hidden = true;
+    elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
   } finally {
     if (state.catalogAbortController === controller) state.catalogAbortController = null;
   }
@@ -638,7 +770,7 @@ function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
   });
-  elements.catalogSearchLabel.textContent = isWikipedia ? "Search or open Wikipedia" : "Search public-domain books";
+  elements.catalogSearchLabel.textContent = isWikipedia ? "Open a Wikipedia article" : "Search public-domain books";
   elements.catalogQuery.placeholder = isWikipedia ? "Search Wikipedia or paste an article link" : "Title, author, or subject";
   elements.catalogSubmit.setAttribute("aria-label", isWikipedia ? "Search Wikipedia" : "Search public-domain books");
   elements.catalogSubmitLabel.textContent = isWikipedia ? "Search Wikipedia" : "Search books";
@@ -652,6 +784,8 @@ function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
     state.catalogAbortController?.abort();
     state.catalogItems = [];
     elements.bookGrid.replaceChildren();
+    elements.catalogProgress.hidden = true;
+    elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
     elements.catalogEyebrow.textContent = "Wikipedia";
     elements.catalogTitle.textContent = "Find an article to hear";
     elements.catalogStatus.textContent = "Enter a person, place, event, or idea above.";
@@ -663,48 +797,71 @@ function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
 }
 
 function updateContinueListening() {
-  const progress = Object.values(progressEntries()).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  const entry = progress && libraryEntries().find((item) => item.key === progress.key);
-  elements.savedCount.textContent = String(libraryEntries().length);
-  if (!progress || !entry) {
+  const entries = libraryEntries();
+  const entriesByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  const recent = Object.values(progressEntries())
+    .map((progress) => ({ progress, entry: entriesByKey.get(progress.key) }))
+    .filter(({ progress, entry }) => entry && progress.totalWords && progress.word / progress.totalWords < 0.995)
+    .sort((left, right) => right.progress.updatedAt - left.progress.updatedAt)
+    .slice(0, 4);
+  elements.savedCount.textContent = String(entries.length);
+  elements.continueList.replaceChildren();
+  if (!recent.length) {
     elements.continueListening.hidden = true;
     return;
   }
   elements.continueListening.hidden = false;
-  elements.continueButton.dataset.key = entry.key;
-  elements.continueTitle.textContent = entry.title;
-  elements.continueAuthor.textContent = entry.author;
-  const ratio = progress.totalWords ? Math.min(1, progress.word / progress.totalWords) : 0;
-  elements.continueProgress.style.width = `${ratio * 100}%`;
-  elements.continueLabel.textContent = `${Math.round(ratio * 100)}% listened · resume`;
-  const fallback = $("i", elements.continueCover);
-  const imageSource = displayImageSource(entry);
-  if (imageSource) {
-    elements.continueImage.src = imageSource;
-    elements.continueImage.hidden = false;
-    fallback.hidden = true;
-  } else {
-    elements.continueImage.removeAttribute("src");
-    elements.continueImage.hidden = true;
-    fallback.hidden = false;
+  recent.forEach(({ progress, entry }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.key = entry.key;
+    button.setAttribute("aria-label", `Resume ${entry.title} by ${entry.author}`);
+    const cover = document.createElement("span");
+    cover.className = "continue-cover";
+    const fallback = document.createElement("i");
     fallback.textContent = entry.title[0]?.toUpperCase() || "H";
-    cachedCoverFor(entry).then((image) => {
-      if (!image || elements.continueButton.dataset.key !== entry.key) return;
-      const source = displayImageSource({ ...entry, image });
-      if (!source) return;
-      elements.continueImage.src = source;
-      elements.continueImage.hidden = false;
-      fallback.hidden = true;
+    cover.append(fallback);
+    const showImage = (source) => {
+      if (!source || cover.querySelector("img")) return;
+      const image = document.createElement("img");
+      image.crossOrigin = "anonymous";
+      image.alt = "";
+      image.src = source;
+      image.addEventListener("load", () => { fallback.hidden = true; }, { once: true });
+      image.addEventListener("error", () => { image.remove(); fallback.hidden = false; }, { once: true });
+      cover.append(image);
+    };
+    const imageSource = displayImageSource(entry);
+    if (imageSource) showImage(imageSource);
+    else cachedCoverFor(entry).then((image) => {
+      if (!image || !button.isConnected) return;
+      showImage(displayImageSource({ ...entry, image }));
     });
-  }
-}
-
-function showContinueCoverFallback() {
-  const entry = libraryEntries().find((item) => item.key === elements.continueButton.dataset.key);
-  elements.continueImage.hidden = true;
-  const fallback = $("i", elements.continueCover);
-  fallback.hidden = false;
-  fallback.textContent = entry?.title?.[0]?.toUpperCase() || "H";
+    const copy = document.createElement("span");
+    copy.className = "continue-copy";
+    const title = document.createElement("strong");
+    title.textContent = entry.title;
+    const author = document.createElement("small");
+    author.textContent = entry.author;
+    const track = document.createElement("span");
+    track.className = "continue-track";
+    const fill = document.createElement("i");
+    const ratio = Math.min(1, progress.word / progress.totalWords);
+    fill.style.width = `${ratio * 100}%`;
+    track.append(fill);
+    const label = document.createElement("span");
+    label.textContent = `${Math.round(ratio * 100)}% listened · ${progress.section || "resume"}`;
+    copy.append(title, author, track, label);
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "m9 7 8 5-8 5V7Z");
+    icon.append(path);
+    button.append(cover, copy, icon);
+    button.addEventListener("click", () => openLibraryItem(entry));
+    elements.continueList.append(button);
+  });
 }
 
 function showArticleImageFallback() {
@@ -720,7 +877,6 @@ function showMiniCoverFallback() {
   fallback.textContent = state.article?.title?.[0]?.toUpperCase() || "H";
 }
 
-elements.continueImage.addEventListener("error", showContinueCoverFallback);
 elements.articleImage.addEventListener("error", showArticleImageFallback);
 elements.miniCoverImage.addEventListener("error", showMiniCoverFallback);
 
@@ -3294,10 +3450,6 @@ elements.importButton.addEventListener("click", () => elements.epubInput.click()
 elements.importInlineButton.addEventListener("click", () => elements.epubInput.click());
 elements.epubInput.addEventListener("change", () => importEpub(elements.epubInput.files?.[0]));
 elements.chaptersButton.addEventListener("click", () => elements.chaptersSheet.showModal());
-elements.continueButton.addEventListener("click", () => {
-  const entry = libraryEntries().find((item) => item.key === elements.continueButton.dataset.key);
-  if (entry) openLibraryItem(entry);
-});
 
 elements.catalogSearch.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -3306,6 +3458,7 @@ elements.catalogSearch.addEventListener("submit", (event) => {
     return;
   }
   state.catalogQuery = elements.catalogQuery.value;
+  state.catalogTopic = "";
   if (state.catalogSource === "saved") state.catalogSource = "all";
   $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.source === state.catalogSource));
@@ -3334,8 +3487,9 @@ $$('button[data-source]', elements.sourceSwitcher).forEach((button) => {
 $$('button[data-topic]', elements.catalogTopics).forEach((button) => {
   button.addEventListener("click", () => {
     setDiscoveryMode("books", { focus: false, refresh: false });
-    state.catalogQuery = button.dataset.topic;
-    elements.catalogQuery.value = button.dataset.topic;
+    state.catalogQuery = "";
+    state.catalogTopic = button.dataset.topic;
+    elements.catalogQuery.value = "";
     if (state.catalogSource === "saved") state.catalogSource = "all";
     $$('button[data-topic]', elements.catalogTopics).forEach((topic) => {
       topic.setAttribute("aria-pressed", String(topic === button));

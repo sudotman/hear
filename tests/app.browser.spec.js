@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { strToU8, zipSync } from "fflate";
 
 const browserErrors = new WeakMap();
 
@@ -61,9 +62,73 @@ async function mockGutenbergBook(page) {
   }));
   await page.route("https://raw.githubusercontent.com/GITenberg/Test_1727/main/1727-h/1727-h.htm", (route) => route.fulfill({
     contentType: "text/html",
-    body: `<h1>The Odyssey</h1><p>The first narrative passage is long enough to read aloud.</p>
-      <p>The second narrative passage continues the public-domain story.</p>
-      <p>The third narrative passage makes this a valid listening edition.</p>`,
+    body: `<h1>The Odyssey</h1>
+      <h2>BOOK I</h2>
+      <p>
+        The first narrative passage is long enough
+        to read aloud without becoming separate rows.
+      </p>
+      <p>
+        The second narrative passage continues the public-domain story
+        without preserving the HTML file's cosmetic wrapping. <a href="#linknote-1" id="linknoteref-1"><small>1</small></a>
+      </p>
+      <p>The third narrative passage makes this a valid listening edition.</p>
+      <h2>FOOTNOTES:</h2>
+      <p class="foot">1 (return)<br>Notes must not become listening copy.</p>`,
+  }));
+}
+
+function standardEpubFixture() {
+  const files = {
+    mimetype: strToU8("application/epub+zip"),
+    "META-INF/container.xml": strToU8(`<?xml version="1.0"?>
+      <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+        <rootfiles><rootfile full-path="epub/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+      </container>`),
+    "epub/content.opf": strToU8(`<?xml version="1.0"?>
+      <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="3.0">
+        <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <dc:identifier id="book-id">test-pride</dc:identifier>
+          <dc:title>Pride and Prejudice</dc:title>
+          <dc:creator>Jane Austen</dc:creator>
+          <dc:language>en</dc:language>
+        </metadata>
+        <manifest>
+          <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+          <item id="chapter" href="text/chapter-1.xhtml" media-type="application/xhtml+xml"/>
+        </manifest>
+        <spine><itemref idref="chapter"/></spine>
+      </package>`),
+    "epub/nav.xhtml": strToU8(`<?xml version="1.0"?>
+      <html xmlns="http://www.w3.org/1999/xhtml"><body><nav><ol><li><a href="text/chapter-1.xhtml">I</a></li></ol></nav></body></html>`),
+    "epub/text/chapter-1.xhtml": strToU8(`<?xml version="1.0"?>
+      <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body><section epub:type="chapter">
+          <h2>I</h2>
+          <p>The opening paragraph contains enough words to make this a readable fixture chapter for the parser.</p>
+          <blockquote epub:type="z3998:letter">
+            <p>I would have thanked you before, my dear aunt, and this letter must appear exactly once.</p>
+            <footer><p>Yours sincerely, etc.</p></footer>
+          </blockquote>
+          <p>The closing paragraph also contains enough words to keep the fixture useful and realistic.</p>
+        </section></body>
+      </html>`),
+  };
+  return Buffer.from(zipSync(files));
+}
+
+async function mockStandardBook(page) {
+  await page.route("https://standardebooks.org/ebooks/jane-austen/pride-and-prejudice", (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<title>Pride and Prejudice, by Jane Austen</title>
+      <meta name="description" content="A carefully produced public-domain edition.">
+      <h1 property="schema:name">Pride and Prejudice</h1>
+      <div property="schema:author"><span property="schema:name">Jane Austen</span></div>
+      <a property="schema:contentUrl" href="/downloads/pride-and-prejudice.epub">EPUB</a>`,
+  }));
+  await page.route("https://standardebooks.org/downloads/pride-and-prejudice.epub?source=feed", (route) => route.fulfill({
+    contentType: "application/epub+zip",
+    body: standardEpubFixture(),
   }));
 }
 
@@ -164,7 +229,25 @@ test("opens a Gutenberg book without requesting browser-blocked OPDS metadata", 
   await expect(page.locator("#article-image")).toBeVisible();
   await expect(page.locator("#article-image")).toHaveAttribute("src", /\/cover\?url=/);
   await expect(page.locator("#source-link")).toHaveAttribute("href", "https://www.gutenberg.org/ebooks/1727");
+  await expect(page.locator("#article-copy > p")).toHaveCount(3);
+  await expect(page.locator("#article-copy > p").first()).toHaveText(
+    "The first narrative passage is long enough to read aloud without becoming separate rows.",
+  );
+  await expect(page.locator("#article-copy")).not.toContainText("FOOTNOTES");
+  await expect(page.locator("#article-copy")).not.toContainText("Notes must not become listening copy.");
+  await expect(page.locator("#article-copy")).not.toContainText(/story\s+1/);
   expect(opdsRequests).toEqual([]);
+});
+
+test("does not repeat paragraphs nested inside EPUB blockquotes", async ({ page }) => {
+  await mockStandardBook(page);
+
+  await page.goto("/?source=standard&book=jane-austen/pride-and-prejudice");
+
+  await expect(page.getByRole("heading", { name: "Pride and Prejudice", level: 1 })).toBeVisible();
+  await expect(page.locator("#article-copy > p")).toHaveCount(4);
+  await expect(page.locator("#article-copy > p").filter({ hasText: "I would have thanked you before" })).toHaveCount(1);
+  await expect(page.locator("#article-copy")).toContainText("Yours sincerely, etc.");
 });
 
 test("makes books and Wikipedia obvious from the homepage and displays catalog covers", async ({ page }) => {

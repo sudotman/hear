@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "./fetch-utils.js";
+import { standardCatalogProxyPath } from "./standard-catalog-policy.js";
 
 const STANDARD_ORIGIN = "https://standardebooks.org";
 const GUTENBERG_ORIGIN = "https://www.gutenberg.org";
@@ -7,7 +8,7 @@ const WORK_CACHE = "hear-work-cache";
 const WORK_STORE = "works";
 const COVER_STORE = "covers";
 const DATABASE_VERSION = 2;
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 const decoder = new TextDecoder();
 
 function xmlDocument(text) {
@@ -45,34 +46,19 @@ function cleanPublicationText(value) {
     .trim();
 }
 
-function cleanPublicationTextPreserveLines(value) {
-  const normalized = String(value || "")
-    .replace(/\u00ad/g, "")
-    .replace(/\[(?:\d+|note\s+\d+|return)\]/gi, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
-  // Split on newlines, clean each segment, then rejoin preserving single vs double breaks.
-  const parts = normalized.split(/(\n+)/);
-  return parts
-    .map((part) => {
-      if (/^\n+$/.test(part)) {
-        // collapse 3+ newlines to double, keep 1-2 as-is
-        return part.length >= 3 ? "\n\n" : part;
-      }
-      const cleaned = cleanPublicationText(part);
-      return cleaned;
-    })
-    .join("")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function elementTextWithLineBreaks(element) {
   const clone = element.cloneNode(true);
-  clone.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
-  // Preserve block-level separators that DOMParser may flatten: some EPUBs use <span> with line breaks
-  return clone.textContent || "";
+  const explicitBreak = "\uE000";
+  clone.querySelectorAll("br").forEach((node) => node.replaceWith(explicitBreak));
+  // XHTML and older Gutenberg HTML are commonly pretty-printed or hard-wrapped.
+  // Those source newlines are not reading-copy line breaks; only an actual <br>
+  // should survive as one.
+  return String(clone.textContent || "")
+    .split(explicitBreak)
+    .map((part) => cleanPublicationText(part))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function textFromMarkup(value) {
@@ -92,12 +78,13 @@ function parseStandardEntries(text) {
   return localElements(document, "entry").map((entry) => {
     const links = localElements(entry, "link");
     const compatibleEpub = links.find((link) => (
-      link.getAttribute("rel") === "enclosure" &&
+      /(?:enclosure|acquisition\/open-access)$/i.test(link.getAttribute("rel") || "") &&
       link.getAttribute("type") === "application/epub+zip" &&
       !/advanced/i.test(link.getAttribute("title") || "")
     ));
     const alternate = links.find((link) => link.getAttribute("rel") === "alternate");
     const thumbnail = localElement(entry, "thumbnail");
+    const thumbnailLink = links.find((link) => /image\/thumbnail$/i.test(link.getAttribute("rel") || ""));
     const author = directLocalElement(entry, "author");
     const sourceUrl = absoluteUrl(nodeText(directLocalElement(entry, "id")), STANDARD_ORIGIN);
     const categories = localElements(entry, "category")
@@ -111,11 +98,11 @@ function parseStandardEntries(text) {
       title: nodeText(directLocalElement(entry, "title"), "Untitled"),
       author: nodeText(directLocalElement(author, "name"), "Unknown author"),
       description: nodeText(directLocalElement(entry, "summary"), "A carefully produced public-domain edition."),
-      image: absoluteUrl(thumbnail?.getAttribute("url"), STANDARD_ORIGIN),
+      image: absoluteUrl(thumbnail?.getAttribute("url") || thumbnailLink?.getAttribute("href"), STANDARD_ORIGIN),
       sourceUrl: absoluteUrl(alternate?.getAttribute("href") || sourceUrl, STANDARD_ORIGIN),
       downloadUrl: absoluteUrl(compatibleEpub?.getAttribute("href"), STANDARD_ORIGIN),
       categories,
-      language: "en",
+      language: nodeText(localElement(entry, "language"), "en"),
     };
   }).filter((item) => item.downloadUrl);
 }
@@ -139,42 +126,89 @@ export function gutenbergItemFromGutendex(book) {
   };
 }
 
-export async function fetchStandardCatalog({ query = "", page = 1, limit = 18, signal } = {}) {
-  const url = new URL("/ebooks", STANDARD_ORIGIN);
-  if (query.trim()) url.searchParams.set("query", query.trim());
-  url.searchParams.set("per-page", String(limit));
-  url.searchParams.set("page", String(page));
+export async function fetchStandardCatalog({ query = "", topic = "", page = 1, limit = 18, signal } = {}) {
+  const cleanQuery = query.trim();
+  if (cleanQuery) {
+    const feedUrl = new URL("/feeds/opds/all", STANDARD_ORIGIN);
+    feedUrl.searchParams.set("query", cleanQuery);
+    feedUrl.searchParams.set("per-page", String(limit));
+    feedUrl.searchParams.set("page", String(page));
+    const feedResponse = await fetchWithTimeout(feedUrl, {
+      headers: { Accept: "application/atom+xml;profile=opds-catalog" },
+      signal,
+    });
+    if (!feedResponse.ok) throw new Error("Standard Ebooks did not respond.");
+    const feedText = await feedResponse.text();
+    if (/<feed[\s>]/i.test(feedText)) return parseStandardEntries(feedText);
+  }
+
+  const proxyPath = topic ? standardCatalogProxyPath({ topic, page, limit }) : "";
+  const url = proxyPath ? new URL(proxyPath, location.origin) : new URL("/ebooks", STANDARD_ORIGIN);
+  if (cleanQuery) url.searchParams.set("query", cleanQuery);
+  if (!proxyPath) {
+    url.searchParams.set("sort", cleanQuery ? "relevance" : "popularity");
+    url.searchParams.set("per-page", String(limit));
+    url.searchParams.set("page", String(page));
+  }
   const response = await fetchWithTimeout(url, { headers: { Accept: "application/xhtml+xml" }, signal });
   if (!response.ok) throw new Error("Standard Ebooks did not respond.");
   const document = new DOMParser().parseFromString(await response.text(), "text/html");
-  return [...document.querySelectorAll('.ebooks-list [typeof="schema:Book"]')].map((book) => {
-    const sourcePath = book.getAttribute("about") || book.querySelector('a[property="schema:url"]')?.getAttribute("href") || "";
-    const sourceUrl = absoluteUrl(sourcePath, STANDARD_ORIGIN);
-    const slug = sourceUrl.replace(`${STANDARD_ORIGIN}/ebooks/`, "");
-    return {
-      id: `standard:${slug}`,
-      source: "standard",
-      sourceLabel: "Standard Ebooks",
-      title: nodeText(book.querySelector('[property="schema:name"]'), "Untitled"),
-      author: nodeText(book.querySelector('.author [property="schema:name"]'), "Unknown author"),
-      description: "A carefully produced public-domain edition.",
-      image: absoluteUrl(book.querySelector('img[property="schema:image"]')?.getAttribute("src"), STANDARD_ORIGIN),
-      sourceUrl,
-      downloadUrl: "",
-      categories: [],
-      language: "en",
-    };
-  }).filter((item) => item.sourceUrl);
+  return [...document.querySelectorAll('.ebooks-list [typeof="schema:Book"]')]
+    .filter((book) => !book.classList.contains("not-pd"))
+    .map((book) => {
+      const sourcePath = book.getAttribute("about") || book.querySelector('a[property="schema:url"]')?.getAttribute("href") || "";
+      const sourceUrl = absoluteUrl(sourcePath, STANDARD_ORIGIN);
+      const slug = sourceUrl.replace(`${STANDARD_ORIGIN}/ebooks/`, "");
+      return {
+        id: `standard:${slug}`,
+        source: "standard",
+        sourceLabel: "Standard Ebooks",
+        title: nodeText(book.querySelector('[property="schema:name"]'), "Untitled"),
+        author: nodeText(book.querySelector('.author [property="schema:name"]'), "Unknown author"),
+        description: "A carefully produced public-domain edition.",
+        image: absoluteUrl(book.querySelector('img[property="schema:image"]')?.getAttribute("src"), STANDARD_ORIGIN),
+        sourceUrl,
+        downloadUrl: "",
+        categories: topic ? [topic] : [],
+        language: "en",
+      };
+    }).filter((item) => item.sourceUrl);
 }
 
-export async function fetchGutenbergCatalog({ query = "", page = 1, signal } = {}) {
+async function fetchGutendexPage({ query = "", topic = "", page = 1, signal } = {}) {
   const url = new URL("/books/", GUTENDEX_ORIGIN);
-  if (query.trim()) url.searchParams.set("search", query.trim());
+  if (query) url.searchParams.set("search", query);
+  if (topic) url.searchParams.set("topic", topic);
   url.searchParams.set("page", String(Math.max(1, page)));
   const response = await fetchWithTimeout(url, { signal });
   if (!response.ok) throw new Error("The Project Gutenberg catalog did not respond.");
   const payload = await response.json();
   return (payload.results || []).map(gutenbergItemFromGutendex).filter((item) => item.gutenbergId);
+}
+
+export async function fetchGutenbergCatalog({ query = "", topic = "", page = 1, signal, onProgress = () => {} } = {}) {
+  const cleanQuery = query.trim();
+  const searches = topic
+    ? [{ topic }]
+    : cleanQuery
+      ? [{ query: cleanQuery }, { topic: cleanQuery }]
+      : [{}];
+  let completed = 0;
+  const results = await Promise.allSettled(searches.map(async (search) => {
+    try {
+      return await fetchGutendexPage({ ...search, page, signal });
+    } finally {
+      completed += 1;
+      onProgress({ completed, total: searches.length });
+    }
+  }));
+  if (results.every((result) => result.status === "rejected")) throw results[0].reason;
+  const items = new Map();
+  results.forEach((result) => {
+    if (result.status !== "fulfilled") return;
+    result.value.forEach((item) => items.set(item.id, item));
+  });
+  return [...items.values()];
 }
 
 export async function fetchStandardItemFromSlug(slug, { signal } = {}) {
@@ -191,8 +225,17 @@ export async function fetchStandardItemFromSlug(slug, { signal } = {}) {
   const description = document.querySelector('meta[name="description"]')?.content
     ?.replace(/^Free epub ebook download of the Standard Ebooks edition of [^:]+:\s*/i, "")
     || "A carefully produced public-domain edition.";
-  const download = document.querySelector('#download a.epub[property="schema:contentUrl"]');
-  if (!download) throw new Error("This edition does not provide a compatible EPUB.");
+  const download = [...document.querySelectorAll('a[property="schema:contentUrl"][href*=".epub"]')]
+    .find((link) => !/(?:_advanced|\.kepub)\.epub(?:\?|$)/i.test(link.getAttribute("href") || ""));
+  if (!download) {
+    if (/will (?:therefore )?enter the U\.S\. public domain|not (?:yet )?in the public domain/i.test(document.body.textContent)) {
+      throw new Error("This title is listed as a future release and is not available to listen to yet.");
+    }
+    const alternatives = await fetchStandardCatalog({ query: `${title} ${author}`, page: 1, limit: 12, signal });
+    const exact = alternatives.find((item) => item.sourceUrl === sourceUrl);
+    if (exact?.downloadUrl) return exact;
+    throw new Error("This Standard Ebooks title is not available as a downloadable EPUB.");
+  }
   const downloadUrl = new URL(download.getAttribute("href"), STANDARD_ORIGIN);
   downloadUrl.searchParams.set("source", "feed");
   return {
@@ -282,6 +325,7 @@ function extractEpubChapter(files, item, title, chapterNumber, titles) {
     // in EPUB 2 and EPUB 3 publications.
     const tagName = element.localName.toUpperCase();
     if (tagName === "LI" && element.querySelector("li")) continue;
+    if (tagName === "BLOCKQUOTE" && element.querySelector("p, li, blockquote")) continue;
     if (tagName !== "TR" && element.closest("tr")) continue;
     if (tagName === "P" && element.closest("li")) continue;
     let value;
@@ -292,8 +336,7 @@ function extractEpubChapter(files, item, title, chapterNumber, titles) {
         .filter(Boolean);
       value = cells.join(cells.length > 1 ? ". " : "");
     } else {
-      const raw = elementTextWithLineBreaks(element);
-      value = raw.includes("\n") ? cleanPublicationTextPreserveLines(raw) : cleanPublicationText(raw);
+      value = elementTextWithLineBreaks(element);
     }
     if (!value || (/^(cover|title page|contents|table of contents|copyright)$/i.test(value) && candidates.length < 8)) continue;
     if (/^H[1-3]$/.test(tagName)) {
@@ -439,7 +482,8 @@ function extractGutenbergHtml(html) {
   const document = new DOMParser().parseFromString(html, "text/html");
   document.querySelectorAll([
     "script", "style", "nav", "aside", "figure", "svg", "table", "audio", "video",
-    "#pg-header", "#pg-footer", ".pg-boilerplate", ".footnote", ".footnotes",
+    "#pg-header", "#pg-footer", ".pg-boilerplate", ".foot", ".footnote", ".footnotes",
+    ".fnanchor", "a[href^='#linknote-']", "a[id^='linknoteref-']", "a[name^='linknoteref-']",
   ].join(",")).forEach((node) => node.remove());
   const candidates = [...document.body.querySelectorAll("h1, h2, h3, h4, p, li, blockquote")];
   const blocks = [];
@@ -449,38 +493,30 @@ function extractGutenbergHtml(html) {
 
   for (const element of candidates) {
     if (element.tagName === "LI" && element.querySelector("li")) continue;
-    const rawForBreaks = elementTextWithLineBreaks(element);
-    const text = rawForBreaks.includes("\n") ? cleanPublicationTextPreserveLines(rawForBreaks) : cleanPublicationText(rawForBreaks);
+    if (element.tagName === "BLOCKQUOTE" && element.querySelector("p, li, blockquote")) continue;
+    if (element.tagName === "P" && element.closest("li")) continue;
+    const text = elementTextWithLineBreaks(element);
     if (!text) continue;
     if (/\*\*\*\s*(?:start|end) of (?:the|this) project gutenberg/i.test(text)) continue;
     if (/^(?:project gutenberg|produced by|transcriber's note|credits:|ebook no\.)/i.test(text)) continue;
 
     const isHeading = /^H[1-4]$/.test(element.tagName);
-    // Split blocks that contain explicit line breaks (verse/prose with <br>) into separate lines
-    const lineParts = text.includes("\n") ? text.split(/\n+/).map((part) => part.trim()).filter(Boolean) : [text];
-    for (let partIndex = 0; partIndex < lineParts.length; partIndex += 1) {
-      let part = lineParts[partIndex];
-      const isLastPart = partIndex === lineParts.length - 1;
-      // Add pause punctuation for verse lines that lack terminal punctuation — period for audible break
-      if (!isLastPart && !isHeading && !/[.!?;:,…—]$/.test(part)) {
-        part = `${part} .`;
-      }
-      if (isHeading && (element.tagName === "H1" || element.tagName === "H2" || chapterHeading(part))) {
-        chapterCount += 1;
-        section = part;
-        sectionId = `chapter-${chapterCount}`;
-        blocks.push({ id: sectionId, type: "h2", text: part, section, sectionId });
-      } else if (isHeading) {
-        blocks.push({ id: `block-${blocks.length}`, type: "h3", text: part, section, sectionId });
-      } else if (part.length >= 12 || lineParts.length > 1) {
-        blocks.push({
-          id: `block-${blocks.length}`,
-          type: element.tagName === "LI" ? "li" : "p",
-          text: part,
-          section,
-          sectionId,
-        });
-      }
+    if (isHeading && /^(?:footnotes?|endnotes?|notes)\s*:?$/i.test(text)) break;
+    if (isHeading && (element.tagName === "H1" || element.tagName === "H2" || chapterHeading(text))) {
+      chapterCount += 1;
+      section = text;
+      sectionId = `chapter-${chapterCount}`;
+      blocks.push({ id: sectionId, type: "h2", text, section, sectionId });
+    } else if (isHeading) {
+      blocks.push({ id: `block-${blocks.length}`, type: "h3", text, section, sectionId });
+    } else if (text.length >= 12 || text.includes("\n")) {
+      blocks.push({
+        id: `block-${blocks.length}`,
+        type: element.tagName === "LI" ? "li" : "p",
+        text,
+        section,
+        sectionId,
+      });
     }
   }
   const narrativeStart = blocks.findIndex((block) => block.type === "h2" && chapterHeading(block.text));
@@ -500,27 +536,16 @@ function extractGutenbergText(text) {
   for (const rawParagraph of paragraphs) {
     const trimmed = rawParagraph.trim();
     if (!trimmed) continue;
+    if (/^(?:footnotes?|endnotes?|notes)\s*:?$/i.test(cleanPublicationText(trimmed))) break;
     // Detect verse: multiple short lines separated by single newlines
     const lines = trimmed.split(/\n/).map((line) => cleanPublicationText(line)).filter(Boolean);
     if (lines.length > 1) {
       const avgLen = lines.reduce((sum, line) => sum + line.length, 0) / lines.length;
-      const isVerse = avgLen < 80 && lines.length >= 2;
+      const shortLineRatio = lines.filter((line) => line.length < 60).length / lines.length;
+      const isVerse = avgLen < 58 && shortLineRatio >= 0.6 && lines.length >= 2;
       if (isVerse) {
-        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-          let line = lines[lineIndex];
-          const isLastLine = lineIndex === lines.length - 1;
-          if (!isLastLine && !/[.!?;:,…—]$/.test(line)) {
-            line = `${line} .`;
-          }
-          if (line.replace(/,\s*$/, "").length < 120 && chapterHeading(line.replace(/,\s*$/, ""))) {
-            chapterCount += 1;
-            section = line;
-            sectionId = `chapter-${chapterCount}`;
-            blocks.push({ id: sectionId, type: "h2", text: line, section, sectionId });
-          } else if (line.length >= 2) {
-            blocks.push({ id: `block-${blocks.length}`, type: "p", text: line, section, sectionId });
-          }
-        }
+        const verse = lines.join("\n");
+        blocks.push({ id: `block-${blocks.length}`, type: "p", text: verse, section, sectionId });
         continue;
       }
     }
@@ -600,7 +625,7 @@ export async function loadGutenbergWork(item, onStatus = () => {}, { signal } = 
 }
 
 export async function loadStandardWork(item, onStatus = () => {}, { signal, parse } = {}) {
-  if (!item.downloadUrl) throw new Error("This Standard Ebooks edition has no compatible EPUB.");
+  if (!item.downloadUrl) throw new Error("This Standard Ebooks title is not available as a downloadable EPUB.");
   if (typeof parse !== "function") throw new Error("The EPUB parser is unavailable.");
   onStatus("Downloading the Standard Ebooks edition");
   const response = await fetchWithTimeout(item.downloadUrl, { headers: { Accept: "application/epub+zip" }, signal }, 90_000);

@@ -81,17 +81,8 @@
             </div>
 
             <aside class="continue-listening" id="continue-listening" aria-labelledby="continue-title" hidden>
-              <p class="eyebrow">Continue listening</p>
-              <button type="button" id="continue-button">
-                <span class="continue-cover" id="continue-cover"><i>H</i><img id="continue-image" alt="" crossorigin="anonymous" hidden /></span>
-                <span class="continue-copy">
-                  <strong id="continue-title">Your last book</strong>
-                  <small id="continue-author">Ready when you are</small>
-                  <span class="continue-track"><i id="continue-progress"></i></span>
-                  <span id="continue-label">Resume</span>
-                </span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5V7Z" /></svg>
-              </button>
+              <p class="eyebrow" id="continue-title">Continue listening</p>
+              <div class="continue-list" id="continue-list"></div>
             </aside>
           </div>
         </div>
@@ -112,12 +103,19 @@
               <div class="catalog-topics" id="catalog-topics" aria-label="Browse a collection">
                 <button type="button" data-topic="" aria-pressed="true">Popular</button>
                 <button type="button" data-topic="fiction" aria-pressed="false">Fiction</button>
-                <button type="button" data-topic="short stories" aria-pressed="false">Short stories</button>
+                <button type="button" data-topic="adventure" aria-pressed="false">Adventure</button>
+                <button type="button" data-topic="mystery" aria-pressed="false">Mystery</button>
+                <button type="button" data-topic="short-stories" aria-pressed="false">Short stories</button>
                 <button type="button" data-topic="philosophy" aria-pressed="false">Ideas</button>
+                <button type="button" data-topic="poetry" aria-pressed="false">Poetry</button>
               </div>
             </div>
           </header>
           <p class="catalog-status" id="catalog-status" role="status" aria-live="polite">Opening the shelves…</p>
+          <div class="catalog-progress" id="catalog-progress" hidden>
+            <progress id="catalog-progress-bar" max="100" value="0" aria-label="Book search progress"></progress>
+            <span id="catalog-progress-label">Checking public libraries</span>
+          </div>
           <div class="book-grid" id="book-grid"></div>
           <button class="load-more" id="load-more" type="button" hidden>Browse more books</button>
         </section>

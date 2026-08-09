@@ -47,5 +47,23 @@ describe("Project Gutenberg catalog", () => {
     expect(requested.pathname).toBe("/books/");
     expect(requested.searchParams.get("search")).toBe("odyssey");
     expect(requested.searchParams.get("page")).toBe("2");
+    const subjectRequest = new URL(fetchMock.mock.calls[1][0]);
+    expect(subjectRequest.searchParams.get("topic")).toBe("odyssey");
+    expect(subjectRequest.searchParams.has("search")).toBe(false);
+  });
+
+  it("uses the subject index directly for category browsing", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGutenbergCatalog({ topic: "mystery", page: 1 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const requested = new URL(fetchMock.mock.calls[0][0]);
+    expect(requested.searchParams.get("topic")).toBe("mystery");
+    expect(requested.searchParams.has("search")).toBe(false);
   });
 });

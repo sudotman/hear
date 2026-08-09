@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 import { allowedCoverUrl } from "./cover-policy.js";
+import { standardCatalogSource } from "./standard-catalog-policy.js";
 
 // Vite plugin to ensure WebKit compatibility: phonemizer's bundled
 // espeak-ng data loader uses `for await (const x of readableStream)`
@@ -74,8 +75,50 @@ function localCoverProxy() {
   };
 }
 
+function localCatalogProxy() {
+  return {
+    name: "hear-local-catalog-proxy",
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        const requestUrl = new URL(request.url || "/", "http://localhost");
+        if (requestUrl.pathname !== "/catalog") {
+          next();
+          return;
+        }
+        const source = standardCatalogSource({
+          topic: requestUrl.searchParams.get("topic"),
+          page: requestUrl.searchParams.get("page"),
+          limit: requestUrl.searchParams.get("limit"),
+        });
+        if (!source) {
+          response.statusCode = 400;
+          response.end("Catalog request not allowed");
+          return;
+        }
+        try {
+          const upstream = await fetch(source, { headers: { Accept: "application/xhtml+xml" } });
+          const type = upstream.headers.get("content-type") || "";
+          if (!upstream.ok || !type.toLocaleLowerCase().includes("html")) {
+            response.statusCode = 502;
+            response.end("Catalog unavailable");
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader("Cache-Control", "public, max-age=900");
+          response.setHeader("Content-Type", type);
+          response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+          response.end(Buffer.from(await upstream.arrayBuffer()));
+        } catch {
+          response.statusCode = 502;
+          response.end("Catalog unavailable");
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [webkitReadableStreamPatch(), localCoverProxy()],
+  plugins: [webkitReadableStreamPatch(), localCoverProxy(), localCatalogProxy()],
   base: "./",
   server: {
     headers: {
