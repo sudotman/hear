@@ -11,7 +11,7 @@ hear is a private, browser-based listening library for web articles, public-doma
 - paste a public article URL from across the web and turn its Reader View-style text into listening copy
 - recover missing public pages through an attributed [Internet Archive](https://archive.org/) snapshot, and find authorized open research copies from [arXiv](https://arxiv.org/) or [Europe PMC](https://europepmc.org/)
 - import epub 2 and epub 3 files, including metadata, covers, reading order, chapters, lists, and table-based dramatic dialogue
-- import selectable-text pdfs locally, with basic two-column reading order and reference-section removal; scanned pdfs currently need OCR before import
+- import research papers and other selectable-text pdfs locally, with basic two-column reading order and reference-section removal; scanned pdfs currently need OCR before import
 - save works to my library and continue up to four recent works
 - navigate by chapter, seek through a work, change playback speed, skip 15 seconds, and resume saved progress
 - use media session controls and a real `<audio>` element for natural-voice playback on iphone control center and the lock screen
