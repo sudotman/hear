@@ -2,12 +2,13 @@
 
 ![hear home screen](docs/images/hear.png)
 
-hear is a private, browser-based listening library for wikipedia articles, public-domain books, and drm-free epubs. it cleans text for narration, remembers listening progress, and keeps books, audio, and preferences on this device. think amazon audible but without having to pay bezos!
+hear is a private, browser-based listening library for web articles, public-domain books, and drm-free epubs. it cleans text for narration, remembers listening progress, and keeps books, audio, and preferences on this device. think amazon audible but without having to pay bezos!
 
 ## what it supports
 
 - browse standard ebooks and project gutenberg catalogs
 - open wikipedia articles without citation markers, references, tables, or navigation furniture in the narration
+- paste a public article URL from across the web and turn its Reader View-style text into listening copy
 - import epub 2 and epub 3 files, including metadata, covers, reading order, chapters, lists, and table-based dramatic dialogue
 - save works to my library and continue up to four recent works
 - navigate by chapter, seek through a work, change playback speed, skip 15 seconds, and resume saved progress
@@ -34,7 +35,7 @@ safari does not expose its native “listen to page” siri voice to web page ja
 
 ## privacy
 
-imported book text, generated audio, listening history, progress, and voice preferences are not sent to any server. cached works use indexeddb; preferences and progress use browser storage. source links and attribution remain attached to catalog works.
+imported book text, generated audio, listening history, progress, and voice preferences are not sent to a speech service. public web pages are fetched through Hear only when the listener opens their URL so sites that block browser CORS can still work; the response is not cached at the server. cleaned works use indexeddb, while preferences and progress use browser storage. source links and attribution remain attached to every work.
 
 ## run locally
 
@@ -50,6 +51,7 @@ create a production build with `npm run build`; output is written to `dist/`.
 ```text
 wikipedia:          ?lang=en&title=apollo+11
 wikipedia (url):   ?url=https://en.wikipedia.org/wiki/Art
+web article:       ?url=https://example.com/an-article
 standard ebooks:   ?source=standard&book=jane-austen/pride-and-prejudice
 project gutenberg: ?source=gutenberg&book=1342
 ```

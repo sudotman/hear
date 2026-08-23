@@ -10,6 +10,11 @@ test("local EPUBs do not create misleading shareable routes", () => {
   expect(routeForWork({ source: "local", key: "local:book" }, "/hear/")).toBe("/hear/");
 });
 
+test("web article routes preserve the publisher URL", () => {
+  expect(routeForWork({ source: "web", sourceUrl: "https://example.com/story?id=42" }, "/hear/"))
+    .toBe("/hear/?url=https%3A%2F%2Fexample.com%2Fstory%3Fid%3D42");
+});
+
 test("book routes and history state remain stable", () => {
   expect(routeForWork({ source: "standard", key: "standard:jane-austen/pride-and-prejudice" }, "/"))
     .toBe("/?source=standard&book=jane-austen%2Fpride-and-prejudice");

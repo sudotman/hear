@@ -28,9 +28,9 @@
       </a>
 
       <form class="header-search" id="header-search" role="search">
-        <label class="sr-only" for="header-query">Search or open Wikipedia</label>
-        <input id="header-query" autocomplete="off" spellcheck="false" placeholder="Search Wikipedia or paste a link…" />
-        <button type="submit" aria-label="Search Wikipedia">
+        <label class="sr-only" for="header-query">Search Wikipedia or open an article link</label>
+        <input id="header-query" autocomplete="off" spellcheck="false" placeholder="Search or paste an article link…" />
+        <button type="submit" aria-label="Search or open article">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
         </button>
       </form>
@@ -57,12 +57,12 @@
             <p class="eyebrow">open source, private, offline ;)</p>
             <h1 id="start-title">Books and articles, <em>spoken.</em></h1>
             <p class="start-deck">
-              Find a public-domain book, open anything on Wikipedia, or bring your own EPUB.
+              Find a public-domain book, open an article from the web, or bring your own EPUB.
             </p>
 
             <div class="search-mode" role="tablist" aria-label="Choose what to search">
               <button type="button" role="tab" data-search-mode="books" aria-selected="true" aria-controls="catalog-search">Books</button>
-              <button type="button" role="tab" data-search-mode="wikipedia" aria-selected="false" aria-controls="catalog-search" tabindex="-1">Wikipedia</button>
+              <button type="button" role="tab" data-search-mode="articles" aria-selected="false" aria-controls="catalog-search" tabindex="-1">Articles</button>
             </div>
 
             <form class="catalog-search" id="catalog-search" role="search">
@@ -77,7 +77,7 @@
             <div class="discovery-note">
               <p id="discovery-hint">Search Standard Ebooks and Project Gutenberg.</p>
               <button type="button" id="import-inline-button">Import an EPUB <span>↗</span></button>
-              <button type="button" id="setup-button" hidden>Add the Wikipedia shortcut <span>↗</span></button>
+              <button type="button" id="setup-button" hidden>Add the article shortcut <span>↗</span></button>
             </div>
 
             <aside class="continue-listening" id="continue-listening" aria-labelledby="continue-title" hidden>
@@ -122,7 +122,7 @@
 
         <footer class="library-footer">
           <p>Natural voice generation, EPUB parsing, listening history, and progress stay on your device.</p>
-          <p>Books remain attributed and linked to <a href="https://standardebooks.org/" target="_blank" rel="noreferrer">Standard Ebooks</a> and <a href="https://www.gutenberg.org/" target="_blank" rel="noreferrer">Project Gutenberg</a>. Wikipedia text keeps its Wikimedia attribution.</p>
+          <p>Every article stays attributed and linked to its publisher. Books remain linked to <a href="https://standardebooks.org/" target="_blank" rel="noreferrer">Standard Ebooks</a> and <a href="https://www.gutenberg.org/" target="_blank" rel="noreferrer">Project Gutenberg</a>.</p>
         </footer>
       </section>
 
@@ -380,7 +380,7 @@
       </div>
       <section class="apple-shortcut-setup" aria-labelledby="apple-shortcut-title">
         <p class="setup-option-label" id="apple-shortcut-title">Share Sheet · iPhone &amp; iPad</p>
-        <p>Send a Wikipedia article straight to Hear from Safari or any app that shares its link.</p>
+        <p>Send any public article straight to Hear from Safari or any app that shares its link.</p>
         <a
           class="apple-shortcut-link"
           href="https://www.icloud.com/shortcuts/c7bdc6f3b47c4c838c2bb808ff0731d7"
@@ -396,7 +396,7 @@
       <ol class="setup-steps">
         <li><span>1</span><p>Show Safari’s Favorites Bar with <strong>⌘⇧B</strong>.</p></li>
         <li><span>2</span><p>Drag the button below into the bar.</p></li>
-        <li><span>3</span><p>Click it from any Wikipedia article.</p></li>
+        <li><span>3</span><p>Click it from the article you want to hear.</p></li>
       </ol>
       <a class="bookmarklet" id="bookmarklet-link" href="#">Listen with Hear <span>↗</span></a>
       <p class="setup-fineprint">The bookmarklet works without Apple Shortcuts. On iPhone or iPad, bookmark this page, edit the bookmark, then replace its address with the code copied below.</p>

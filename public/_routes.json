@@ -1,5 +1,5 @@
 {
   "version": 1,
-  "include": ["/catalog", "/cover"],
+  "include": ["/article", "/catalog", "/cover"],
   "exclude": []
 }

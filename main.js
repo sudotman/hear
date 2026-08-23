@@ -30,6 +30,7 @@ import { selectLookaheadSegmentIndices, selectNeuralCacheEvictions, shareInFligh
 import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
 import { coverProxyPath } from "./cover-policy.js";
 import { segmentNarrationSentences } from "./narration-text.js";
+import { looksLikeArticleUrl, normalizePublicArticleUrl } from "./article-policy.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -390,7 +391,7 @@ function workLibraryEntry(work) {
     sourceLabel: work.sourceLabel,
     sourceUrl: work.sourceUrl,
     title: work.title,
-    author: work.author || (work.kind === "article" ? "Wikipedia" : "Unknown author"),
+    author: work.author || work.sourceLabel || "Unknown author",
     description: work.description,
     image: work.image?.startsWith("data:") ? (work.catalogItem?.image || "") : work.image,
     lang: work.lang,
@@ -477,7 +478,7 @@ function renderBookCard(item, { removable = false } = {}) {
   button.type = "button";
   button.setAttribute(
     "aria-label",
-    item.kind === "article" ? `Open ${item.title} from Wikipedia` : `Open ${item.title} by ${item.author}`,
+    item.kind === "article" ? `Open ${item.title} from ${item.sourceLabel || "its publisher"}` : `Open ${item.title} by ${item.author}`,
   );
 
   const cover = document.createElement("span");
@@ -504,7 +505,7 @@ function renderBookCard(item, { removable = false } = {}) {
   title.textContent = item.title;
   const author = document.createElement("small");
   author.textContent = item.kind === "article"
-    ? item.description || "Wikipedia article"
+    ? item.description || `${item.sourceLabel || "Web"} article`
     : item.author || "Unknown author";
   button.append(cover, title, author);
 
@@ -761,34 +762,35 @@ function chooseCatalogSource(source) {
 }
 
 function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
-  const nextMode = mode === "wikipedia" ? "wikipedia" : "books";
+  const nextMode = mode === "articles" ? "articles" : "books";
   const changed = state.discoveryMode !== nextMode;
   state.discoveryMode = nextMode;
-  const isWikipedia = state.discoveryMode === "wikipedia";
+  const isArticles = state.discoveryMode === "articles";
   elements.searchModes.forEach((button) => {
     const selected = button.dataset.searchMode === state.discoveryMode;
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
   });
-  elements.catalogSearchLabel.textContent = isWikipedia ? "Open a Wikipedia article" : "Search public-domain books";
-  elements.catalogQuery.placeholder = isWikipedia ? "Search Wikipedia or paste an article link" : "Title, author, or subject";
-  elements.catalogSubmit.setAttribute("aria-label", isWikipedia ? "Search Wikipedia" : "Search public-domain books");
-  elements.catalogSubmitLabel.textContent = isWikipedia ? "Search Wikipedia" : "Search books";
-  elements.discoveryHint.textContent = isWikipedia
-    ? "Search by topic, then choose the article you want to hear."
+  elements.catalogSearchLabel.textContent = isArticles ? "Open an article or search Wikipedia" : "Search public-domain books";
+  elements.catalogQuery.placeholder = isArticles ? "Paste an article URL or search Wikipedia" : "Title, author, or subject";
+  elements.catalogSubmit.setAttribute("aria-label", isArticles ? "Open or search articles" : "Search public-domain books");
+  elements.catalogSubmitLabel.textContent = isArticles ? "Open article" : "Search books";
+  elements.discoveryHint.textContent = isArticles
+    ? "Paste a public article URL. Plain searches use Wikipedia; listening stays on this device."
     : "Search Standard Ebooks and Project Gutenberg.";
-  elements.importInlineButton.hidden = isWikipedia;
-  elements.setupButton.hidden = !isWikipedia;
-  elements.catalogControls.hidden = isWikipedia;
-  if (changed && isWikipedia) {
+  elements.importInlineButton.hidden = isArticles;
+  elements.setupButton.hidden = !isArticles;
+  elements.catalogControls.hidden = isArticles;
+  if (changed && isArticles) {
     state.catalogAbortController?.abort();
+    state.catalogRequestId += 1;
     state.catalogItems = [];
     elements.bookGrid.replaceChildren();
     elements.catalogProgress.hidden = true;
     elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
-    elements.catalogEyebrow.textContent = "Wikipedia";
-    elements.catalogTitle.textContent = "Find an article to hear";
-    elements.catalogStatus.textContent = "Enter a person, place, event, or idea above.";
+    elements.catalogEyebrow.textContent = "From across the web";
+    elements.catalogTitle.textContent = "Open an article to hear";
+    elements.catalogStatus.textContent = "Paste a public article link, or enter a topic to search Wikipedia.";
     elements.loadMore.hidden = true;
   } else if (changed && refresh) {
     loadCatalog();
@@ -946,7 +948,7 @@ async function openLibraryItem(item, options = {}) {
     return;
   }
   if (item.kind === "article") {
-    loadArticle(`${item.lang || "en"}:${item.title}`, options);
+    loadArticle(item.source === "web" && item.sourceUrl ? item.sourceUrl : `${item.lang || "en"}:${item.title}`, options);
     return;
   }
   if (item.source === "local") {
@@ -1023,7 +1025,7 @@ async function importEpub(file, { historyMode = "push" } = {}) {
 }
 
 function cleanText(value) {
-  return value
+  return String(value || "")
     .replace(/\[[\d\s,–—-]+\]/g, "")
     .replace(/\[(?:citation needed|clarification needed|when\?|where\?|who\?)\]/gi, "")
     .replace(/\s+([,.;:!?])/g, "$1")
@@ -1054,17 +1056,25 @@ function wordCount(text) {
 
 function parseArticleInput(rawInput) {
   const input = rawInput.trim();
-  if (!input) throw new Error("Paste a Wikipedia link or enter an article title.");
+  if (!input) throw new Error("Paste an article link or enter a Wikipedia topic.");
 
   let possibleUrl = input;
-  if (/^(?:[a-z-]+\.)?(?:m\.)?wikipedia\.org\//i.test(input)) {
+  if (looksLikeArticleUrl(input) && !/^https?:\/\//i.test(input)) {
     possibleUrl = `https://${input}`;
   }
 
   if (/^https?:\/\//i.test(possibleUrl)) {
-    const url = new URL(possibleUrl);
+    const publicUrl = normalizePublicArticleUrl(possibleUrl);
+    if (!publicUrl) throw new Error("Use a public article URL without a login or private network address.");
+    const url = new URL(publicUrl);
     const hostMatch = url.hostname.match(/^([a-z-]+)(?:\.m)?\.wikipedia\.org$/i);
-    if (!hostMatch) throw new Error("That link isn’t a Wikipedia article.");
+    if (!hostMatch) {
+      return {
+        type: "web",
+        url: publicUrl,
+        fromUrl: true,
+      };
+    }
 
     let title = "";
     if (url.pathname.startsWith("/wiki/")) {
@@ -1075,6 +1085,7 @@ function parseArticleInput(rawInput) {
 
     if (!title) throw new Error("I couldn’t find an article title in that link.");
     return {
+      type: "wikipedia",
       lang: hostMatch[1].toLowerCase(),
       title: decodeURIComponent(title).replaceAll("_", " "),
       fromUrl: true,
@@ -1083,6 +1094,7 @@ function parseArticleInput(rawInput) {
 
   const languagePrefix = input.match(/^([a-z-]{2,12}):\s*(.+)$/i);
   return {
+    type: "wikipedia",
     lang: languagePrefix ? languagePrefix[1].toLowerCase() : "en",
     title: languagePrefix ? languagePrefix[2] : input,
     fromUrl: false,
@@ -1172,7 +1184,7 @@ async function searchWikipedia(parsed, { scroll = true } = {}) {
   }
 }
 
-function handleWikipediaInput(rawInput, { fromHeader = false } = {}) {
+function handleArticleInput(rawInput, { fromHeader = false } = {}) {
   let parsed;
   try {
     parsed = parseArticleInput(rawInput);
@@ -1185,7 +1197,7 @@ function handleWikipediaInput(rawInput, { fromHeader = false } = {}) {
     return;
   }
   if (fromHeader) {
-    setDiscoveryMode("wikipedia", { focus: false });
+    setDiscoveryMode("articles", { focus: false });
     elements.catalogQuery.value = rawInput.trim();
     navigateToLibrary();
   }
@@ -1240,6 +1252,82 @@ async function fetchArticle(title, language, allowSearch = true, { signal } = {}
     source: "wikipedia",
     sourceLabel: "Wikipedia",
     sourceUrl: summary?.content_urls?.desktop?.page || `${origin}/wiki/${encodeURIComponent(resolvedTitle.replaceAll(" ", "_"))}`,
+    catalogItem: null,
+    blocks,
+  };
+}
+
+function webSourceLabel(sourceUrl, siteName = "") {
+  const namedSource = cleanText(siteName);
+  if (namedSource) return conciseText(namedSource, 64);
+  try {
+    return new URL(sourceUrl).hostname.replace(/^www\./i, "");
+  } catch {
+    return "Web article";
+  }
+}
+
+function webArticleError(status) {
+  if (status === 400 || status === 403) return "Use a public article URL without a login or private network address.";
+  if (status === 413) return "That page is over the 3 MB article import limit.";
+  if (status === 415) return "That link does not point to an HTML article.";
+  return "That publisher blocked the article request. Try its print view or another public link.";
+}
+
+async function fetchWebArticle(sourceUrl, { signal, onStatus } = {}) {
+  const requestUrl = `/article?url=${encodeURIComponent(sourceUrl)}`;
+  onStatus?.(`Fetching ${new URL(sourceUrl).hostname}`);
+  const response = await fetchWithTimeout(requestUrl, { headers: { Accept: "text/plain" }, signal });
+  if (!response.ok) throw new Error(webArticleError(response.status));
+
+  const html = await response.text();
+  let resolvedUrl = sourceUrl;
+  try {
+    resolvedUrl = decodeURIComponent(response.headers.get("x-hear-source-url") || "") || sourceUrl;
+  } catch {
+    resolvedUrl = sourceUrl;
+  }
+  resolvedUrl = normalizePublicArticleUrl(resolvedUrl) || sourceUrl;
+  onStatus?.("Finding the article and removing page clutter");
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const docLanguage = doc.documentElement.lang || "en";
+  doc.querySelectorAll("script, style, template, noscript, iframe, object, embed").forEach((element) => element.remove());
+  const base = doc.createElement("base");
+  base.href = resolvedUrl;
+  doc.head.prepend(base);
+
+  let readable;
+  try {
+    const { Readability } = await import("@mozilla/readability");
+    readable = new Readability(doc, { maxElemsToParse: 30_000, charThreshold: 180 }).parse();
+  } catch {
+    throw new Error("That page is too complex to turn into a clean article.");
+  }
+  if (!readable?.content || !readable.title) {
+    throw new Error("No readable article was found. Try the publisher’s print view or a direct article link.");
+  }
+
+  const blocks = extractArticleBlocks(readable.content);
+  const readableWords = blocks.reduce((count, block) => count + (block.type.startsWith("h") ? 0 : wordCount(block.text)), 0);
+  if (readableWords < 40) {
+    throw new Error("The page did not include enough readable article text. It may require a login or JavaScript.");
+  }
+
+  const sourceLabel = webSourceLabel(resolvedUrl, readable.siteName);
+  const byline = cleanText(readable.byline || "").replace(/^by\s+/i, "");
+  const language = String(readable.lang || docLanguage || "en").trim().replaceAll("_", "-") || "en";
+  return {
+    key: `web:${resolvedUrl}`,
+    kind: "article",
+    lang: language,
+    title: cleanText(readable.title),
+    author: byline || sourceLabel,
+    description: conciseText(readable.excerpt, 320) || `A clean listening edition from ${sourceLabel}.`,
+    image: "",
+    source: "web",
+    sourceLabel,
+    sourceUrl: resolvedUrl,
     catalogItem: null,
     blocks,
   };
@@ -1536,7 +1624,7 @@ function renderArticleArtwork(article) {
     elements.articleImage.alt = article.kind === "book" ? `Cover of ${article.title}` : `Lead image for ${article.title}`;
     elements.imageCaption.textContent = article.kind === "book"
       ? `Cover from ${article.sourceLabel}`
-      : `Image from ${article.lang}.wikipedia.org`;
+      : article.source === "wikipedia" ? `Image from ${article.lang}.wikipedia.org` : `Image from ${article.sourceLabel}`;
     elements.imageWrap.hidden = false;
     elements.articlePlaceholder.hidden = true;
     elements.miniCoverImage.src = source;
@@ -1556,7 +1644,7 @@ function renderArticle(article) {
     : article.description;
   elements.articleKicker.textContent = article.kind === "book"
     ? `${article.sourceLabel} · listening edition`
-    : `From ${article.lang}.wikipedia.org`;
+    : article.source === "wikipedia" ? `From ${article.lang}.wikipedia.org` : `From ${article.sourceLabel}`;
   elements.sourceLink.hidden = !article.sourceUrl;
   elements.sourceLink.href = article.sourceUrl || "#";
   elements.sourceLink.textContent = article.kind === "book" ? `Edition at ${article.sourceLabel} ↗` : "Original article ↗";
@@ -3265,12 +3353,23 @@ async function loadArticle(rawInput, { historyMode = "push" } = {}) {
     return;
   }
 
+  if (!elements.startView.hidden) {
+    setDiscoveryMode("articles", { focus: false });
+    elements.catalogQuery.value = rawInput.trim();
+  }
+
   stopSpeech("idle");
   clearNeuralCache();
-  const { controller, requestId } = beginContentTask("Editing for your ears…", "Removing citations and references");
+  const detail = parsed.type === "web" ? "Fetching the public article" : "Removing citations and references";
+  const { controller, requestId } = beginContentTask("Editing for your ears…", detail);
 
   try {
-    const article = await fetchArticle(parsed.title, parsed.lang, true, { signal: controller.signal });
+    const article = parsed.type === "web"
+      ? await fetchWebArticle(parsed.url, {
+        signal: controller.signal,
+        onStatus: (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
+      })
+      : await fetchArticle(parsed.title, parsed.lang, true, { signal: controller.signal });
     if (controller.signal.aborted || requestId !== state.contentRequestId) return;
     await cacheWork(article).catch(() => {});
     activateWork(article, { historyMode });
@@ -3453,8 +3552,8 @@ elements.chaptersButton.addEventListener("click", () => elements.chaptersSheet.s
 
 elements.catalogSearch.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (state.discoveryMode === "wikipedia") {
-    handleWikipediaInput(elements.catalogQuery.value);
+  if (state.discoveryMode === "articles") {
+    handleArticleInput(elements.catalogQuery.value);
     return;
   }
   state.catalogQuery = elements.catalogQuery.value;
@@ -3473,7 +3572,7 @@ elements.searchModes.forEach((button) => {
   button.addEventListener("keydown", (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    setDiscoveryMode(button.dataset.searchMode === "books" ? "wikipedia" : "books");
+    setDiscoveryMode(button.dataset.searchMode === "books" ? "articles" : "books");
   });
 });
 
@@ -3508,7 +3607,7 @@ elements.loadMore.addEventListener("click", () => {
 
 elements.headerSearch.addEventListener("submit", (event) => {
   event.preventDefault();
-  handleWikipediaInput(elements.headerQuery.value, { fromHeader: true });
+  handleArticleInput(elements.headerQuery.value, { fromHeader: true });
 });
 
 $$('[data-article]').forEach((button) => {

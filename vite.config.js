@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import { resolve } from "node:path";
 import { allowedCoverUrl } from "./cover-policy.js";
 import { standardCatalogSource } from "./standard-catalog-policy.js";
+import { onRequestGet as handleArticleRequest } from "./functions/article.js";
 
 // Vite plugin to ensure WebKit compatibility: phonemizer's bundled
 // espeak-ng data loader uses `for await (const x of readableStream)`
@@ -117,8 +118,27 @@ function localCatalogProxy() {
   };
 }
 
+function localArticleProxy() {
+  return {
+    name: "hear-local-article-proxy",
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        const requestUrl = new URL(request.url || "/", "http://localhost");
+        if (requestUrl.pathname !== "/article") {
+          next();
+          return;
+        }
+        const result = await handleArticleRequest({ request: new Request(requestUrl.href) });
+        response.statusCode = result.status;
+        result.headers.forEach((value, name) => response.setHeader(name, value));
+        response.end(Buffer.from(await result.arrayBuffer()));
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [webkitReadableStreamPatch(), localCoverProxy(), localCatalogProxy()],
+  plugins: [webkitReadableStreamPatch(), localCoverProxy(), localCatalogProxy(), localArticleProxy()],
   base: "./",
   server: {
     headers: {

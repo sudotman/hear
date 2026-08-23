@@ -3,6 +3,8 @@ export function routeForWork(work, pathname = "/") {
   if (work?.source === "wikipedia") {
     params.set("lang", work.lang || "en");
     params.set("title", work.title);
+  } else if (work?.source === "web" && work.sourceUrl) {
+    params.set("url", work.sourceUrl);
   } else if (work?.source === "standard") {
     params.set("source", "standard");
     params.set("book", String(work.key || "").replace(/^standard:/, ""));
