@@ -77,6 +77,12 @@ export async function onRequestGet({ request }) {
     const resolvedSource = normalizePublicArticleUrl(upstream.url || requestedSource);
     const type = (upstream.headers.get("content-type") || "").toLowerCase();
     const isHtml = type.includes("text/html") || type.includes("application/xhtml+xml");
+    if ([401, 402, 403, 451].includes(upstream.status)) {
+      return errorResponse("The publisher did not allow this article request", 403);
+    }
+    if ([404, 410].includes(upstream.status)) {
+      return errorResponse("The article is no longer available at this address", 404);
+    }
     if (!upstream.ok) return errorResponse("The publisher did not make this article available", 502);
     if (!resolvedSource) return errorResponse("The article redirected to a private address", 403);
     if (!isHtml) return errorResponse("That URL is not an HTML article", 415);

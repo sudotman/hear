@@ -21,6 +21,7 @@
     "fflate": "^0.8.3",
     "kokoro-js": "^1.2.1",
     "onnxruntime-web": "^1.26.0-dev.20260416-b7804b056c",
+    "pdfjs-dist": "^6.2.108",
     "phonemizer": "^1.2.1"
   },
   "overrides": {

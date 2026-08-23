@@ -44,3 +44,15 @@ test("rejects non-HTML and oversized publisher responses", async () => {
   expect((await onRequestGet({ request })).status).toBe(415);
   expect((await onRequestGet({ request })).status).toBe(413);
 });
+
+test("preserves missing and access-denied states for recovery decisions", async () => {
+  const responses = [
+    new Response("gone", { status: 410, headers: { "Content-Type": "text/html" } }),
+    new Response("subscription required", { status: 402, headers: { "Content-Type": "text/html" } }),
+  ];
+  vi.stubGlobal("fetch", vi.fn(async () => responses.shift()));
+  const request = new Request("https://hear.example/article?url=https%3A%2F%2Fjournal.example%2Fstory");
+
+  expect((await onRequestGet({ request })).status).toBe(404);
+  expect((await onRequestGet({ request })).status).toBe(403);
+});

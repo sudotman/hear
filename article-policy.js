@@ -72,3 +72,37 @@ export function looksLikeArticleUrl(value) {
   return /^https?:\/\//i.test(input)
     || /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?::\d+)?(?:[/?#]|$)/i.test(input);
 }
+
+export function normalizeDoi(rawValue) {
+  let value = String(rawValue || "").trim();
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // Keep the original value when it contains a stray percent sign.
+  }
+  value = value
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
+    .replace(/^doi:\s*/i, "")
+    .trim();
+  const match = value.match(/10\.\d{4,9}\/[-._;()/:a-z0-9]+/i);
+  if (!match) return "";
+  return match[0].replace(/[.,;:]+$/, "").toLowerCase();
+}
+
+export function doiFromArticleUrl(rawValue) {
+  const source = normalizePublicArticleUrl(rawValue);
+  if (!source) return "";
+  const url = new URL(source);
+  if (/^(?:dx\.)?doi\.org$/i.test(url.hostname)) return normalizeDoi(url.pathname.slice(1));
+  return normalizeDoi(`${url.pathname} ${url.search}`);
+}
+
+export function arxivHtmlUrl(rawValue) {
+  const source = normalizePublicArticleUrl(rawValue);
+  if (!source) return "";
+  const url = new URL(source);
+  if (!/(^|\.)arxiv\.org$/i.test(url.hostname)) return "";
+  const match = url.pathname.match(/^\/(?:abs|pdf|html)\/(.+?)(?:\.pdf)?$/i);
+  if (!match || !/^(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?$/i.test(match[1])) return "";
+  return `https://arxiv.org/html/${match[1]}`;
+}

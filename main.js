@@ -30,7 +30,12 @@ import { selectLookaheadSegmentIndices, selectNeuralCacheEvictions, shareInFligh
 import { clearAllModelCaches, deleteCacheEntry, getModelCacheEntries } from "./model-cache.js";
 import { coverProxyPath } from "./cover-policy.js";
 import { segmentNarrationSentences } from "./narration-text.js";
-import { looksLikeArticleUrl, normalizePublicArticleUrl } from "./article-policy.js";
+import {
+  doiFromArticleUrl,
+  looksLikeArticleUrl,
+  normalizeDoi,
+  normalizePublicArticleUrl,
+} from "./article-policy.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -43,7 +48,7 @@ const elements = {
   libraryButton: $("#library-button"),
   importButton: $("#import-button"),
   importInlineButton: $("#import-inline-button"),
-  epubInput: $("#epub-input"),
+  documentInput: $("#document-input"),
   catalogSearch: $("#catalog-search"),
   catalogQuery: $("#catalog-query"),
   catalogSearchLabel: $("#catalog-search-label"),
@@ -73,6 +78,7 @@ const elements = {
   durationLabel: $("#duration-label"),
   wordCountLabel: $("#word-count-label"),
   sourceLink: $("#source-link"),
+  originalSourceLink: $("#original-source-link"),
   articleCopy: $("#article-copy"),
   outlineNav: $("#outline-nav"),
   outlineLabel: $("#outline-label"),
@@ -143,6 +149,9 @@ const elements = {
   downloadNeural: $("#download-neural"),
   setupButton: $("#setup-button"),
   setupSheet: $("#setup-sheet"),
+  recoverySheet: $("#recovery-sheet"),
+  recoveryDescription: $("#recovery-description"),
+  recoveryOptions: $("#recovery-options"),
   bookmarkletLink: $("#bookmarklet-link"),
   copyBookmarklet: $("#copy-bookmarklet"),
   shareButton: $("#share-button"),
@@ -390,6 +399,8 @@ function workLibraryEntry(work) {
     source: work.source,
     sourceLabel: work.sourceLabel,
     sourceUrl: work.sourceUrl,
+    originalSourceUrl: work.originalSourceUrl || "",
+    provenanceLabel: work.provenanceLabel || "",
     title: work.title,
     author: work.author || work.sourceLabel || "Unknown author",
     description: work.description,
@@ -948,11 +959,18 @@ async function openLibraryItem(item, options = {}) {
     return;
   }
   if (item.kind === "article") {
-    loadArticle(item.source === "web" && item.sourceUrl ? item.sourceUrl : `${item.lang || "en"}:${item.title}`, options);
+    loadArticle(
+      item.source === "web" && item.sourceUrl ? item.sourceUrl : `${item.lang || "en"}:${item.title}`,
+      {
+        ...options,
+        originalSourceUrl: item.originalSourceUrl || "",
+        provenanceLabel: item.provenanceLabel || "",
+      },
+    );
     return;
   }
   if (item.source === "local") {
-    showToast("This EPUB is no longer in browser storage. Import the file again.");
+    showToast("This imported document is no longer in browser storage. Import the file again.");
     return;
   }
   loadCatalogItem(item.catalogItem || item, options);
@@ -1019,8 +1037,45 @@ async function importEpub(file, { historyMode = "push" } = {}) {
     if (isAbortError(error)) return;
     showToast(error.message || "That EPUB could not be opened.");
   } finally {
-    elements.epubInput.value = "";
     finishContentTask(controller, requestId);
+  }
+}
+
+async function importPdf(file, { historyMode = "push" } = {}) {
+  if (!file) return;
+  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+    showToast("Choose a PDF file.");
+    return;
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    showToast("That PDF is over the 50 MB import limit.");
+    return;
+  }
+  const { controller, requestId } = beginContentTask(`Opening ${file.name}…`, "Loading the local PDF parser");
+  try {
+    const { parsePdfFile } = await import("./pdf-import.js");
+    const work = await parsePdfFile(file, {
+      signal: controller.signal,
+      onStatus: (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
+    });
+    if (controller.signal.aborted || requestId !== state.contentRequestId) return;
+    await cacheWork(work).catch(() => {});
+    activateWork(work, { historyMode });
+  } catch (error) {
+    if (isAbortError(error)) return;
+    showToast(error.message || "That PDF could not be opened.");
+  } finally {
+    finishContentTask(controller, requestId);
+  }
+}
+
+async function importDocument(file, options = {}) {
+  if (!file) return;
+  try {
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") await importPdf(file, options);
+    else await importEpub(file, options);
+  } finally {
+    elements.documentInput.value = "";
   }
 }
 
@@ -1267,18 +1322,29 @@ function webSourceLabel(sourceUrl, siteName = "") {
   }
 }
 
+class ArticleImportError extends Error {
+  constructor(message, code = "unavailable", { doi = "" } = {}) {
+    super(message);
+    this.name = "ArticleImportError";
+    this.code = code;
+    this.doi = doi;
+  }
+}
+
 function webArticleError(status) {
-  if (status === 400 || status === 403) return "Use a public article URL without a login or private network address.";
-  if (status === 413) return "That page is over the 3 MB article import limit.";
-  if (status === 415) return "That link does not point to an HTML article.";
-  return "That publisher blocked the article request. Try its print view or another public link.";
+  if (status === 400) return new ArticleImportError("Use a public article URL without a login or private network address.", "invalid");
+  if (status === 403) return new ArticleImportError("That page did not allow Hear to retrieve its article text.", "access-denied");
+  if (status === 404) return new ArticleImportError("That article is no longer available at its original address.", "missing");
+  if (status === 413) return new ArticleImportError("That page is over the 3 MB article import limit.", "too-large");
+  if (status === 415) return new ArticleImportError("That link does not point to an HTML article. Download a PDF copy and import it instead.", "non-html");
+  return new ArticleImportError("That publisher could not make the article available. Try again or use another public link.", "unavailable");
 }
 
 async function fetchWebArticle(sourceUrl, { signal, onStatus } = {}) {
   const requestUrl = `/article?url=${encodeURIComponent(sourceUrl)}`;
   onStatus?.(`Fetching ${new URL(sourceUrl).hostname}`);
   const response = await fetchWithTimeout(requestUrl, { headers: { Accept: "text/plain" }, signal });
-  if (!response.ok) throw new Error(webArticleError(response.status));
+  if (!response.ok) throw webArticleError(response.status);
 
   const html = await response.text();
   let resolvedUrl = sourceUrl;
@@ -1292,6 +1358,9 @@ async function fetchWebArticle(sourceUrl, { signal, onStatus } = {}) {
 
   const doc = new DOMParser().parseFromString(html, "text/html");
   const docLanguage = doc.documentElement.lang || "en";
+  const doi = normalizeDoi(doc.querySelector(
+    'meta[name="citation_doi" i], meta[name="dc.identifier" i], meta[name="doi" i]',
+  )?.content) || doiFromArticleUrl(resolvedUrl);
   doc.querySelectorAll("script, style, template, noscript, iframe, object, embed").forEach((element) => element.remove());
   const base = doc.createElement("base");
   base.href = resolvedUrl;
@@ -1302,16 +1371,28 @@ async function fetchWebArticle(sourceUrl, { signal, onStatus } = {}) {
     const { Readability } = await import("@mozilla/readability");
     readable = new Readability(doc, { maxElemsToParse: 30_000, charThreshold: 180 }).parse();
   } catch {
-    throw new Error("That page is too complex to turn into a clean article.");
+    throw new ArticleImportError("That page is too complex to turn into a clean article.", "unreadable", { doi });
   }
   if (!readable?.content || !readable.title) {
-    throw new Error("No readable article was found. Try the publisher’s print view or a direct article link.");
+    throw new ArticleImportError(
+      "No readable article was found. Try the publisher’s print view or a direct article link.",
+      "unreadable",
+      { doi },
+    );
   }
 
   const blocks = extractArticleBlocks(readable.content);
   const readableWords = blocks.reduce((count, block) => count + (block.type.startsWith("h") ? 0 : wordCount(block.text)), 0);
-  if (readableWords < 40) {
-    throw new Error("The page did not include enough readable article text. It may require a login or JavaScript.");
+  const accessWallPattern = /(?:purchase|buy|rent) (?:this )?(?:article|paper)|institutional access|subscribe to (?:read|access|continue)|(?:sign|log) in (?:through|with|to) (?:your )?(?:institution|access)|get full access|check access|preview of subscription content/i;
+  const appearsAccessLimited = doi && readableWords < 1_200 && accessWallPattern.test(readable.textContent || "");
+  if (readableWords < 40 || appearsAccessLimited) {
+    throw new ArticleImportError(
+      appearsAccessLimited
+        ? "The page appears to contain an abstract or access notice instead of the full paper."
+        : "The page did not include enough readable article text. It may require a login or JavaScript.",
+      "limited",
+      { doi },
+    );
   }
 
   const sourceLabel = webSourceLabel(resolvedUrl, readable.siteName);
@@ -1331,6 +1412,62 @@ async function fetchWebArticle(sourceUrl, { signal, onStatus } = {}) {
     catalogItem: null,
     blocks,
   };
+}
+
+async function fetchRecoveryAlternatives(sourceUrl, { doi = "", includeArchive = false, signal } = {}) {
+  const endpoint = new URL("/recover", location.origin);
+  endpoint.searchParams.set("url", sourceUrl);
+  if (doi) endpoint.searchParams.set("doi", doi);
+  if (includeArchive) endpoint.searchParams.set("archive", "1");
+  const response = await fetchWithTimeout(endpoint, { headers: { Accept: "application/json" }, signal });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return Array.isArray(payload.alternatives) ? payload.alternatives.filter((alternative) => (
+    alternative
+    && normalizePublicArticleUrl(alternative.url)
+    && typeof alternative.provider === "string"
+    && typeof alternative.label === "string"
+  )) : [];
+}
+
+function showRecoveryOptions(alternatives, originalSourceUrl) {
+  elements.recoveryDescription.textContent = alternatives.some((alternative) => alternative.kind === "archive")
+    ? "The original page could not be prepared. Choose an archived snapshot or authorized open copy instead."
+    : "The original page could not be prepared. Choose an authorized open copy instead.";
+  elements.recoveryOptions.replaceChildren();
+
+  alternatives.forEach((alternative) => {
+    const button = document.createElement("button");
+    button.className = "recovery-option";
+    button.type = "button";
+
+    const provider = document.createElement("span");
+    provider.className = "recovery-provider";
+    provider.textContent = alternative.provider;
+    const copy = document.createElement("span");
+    copy.className = "recovery-option-copy";
+    const label = document.createElement("strong");
+    label.textContent = alternative.label;
+    const detail = document.createElement("small");
+    detail.textContent = alternative.detail || "Publicly available copy";
+    const arrow = document.createElement("span");
+    arrow.className = "recovery-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "↗";
+    copy.append(label, detail);
+    button.append(provider, copy, arrow);
+    button.addEventListener("click", () => {
+      elements.recoverySheet.close();
+      loadArticle(alternative.url, {
+        originalSourceUrl,
+        provenanceLabel: alternative.provider,
+      });
+    });
+    elements.recoveryOptions.append(button);
+  });
+
+  if (!elements.recoverySheet.open) elements.recoverySheet.showModal();
+  requestAnimationFrame(() => $("button", elements.recoveryOptions)?.focus({ preventScroll: true }));
 }
 
 function extractArticleBlocks(html) {
@@ -1644,15 +1781,26 @@ function renderArticle(article) {
     : article.description;
   elements.articleKicker.textContent = article.kind === "book"
     ? `${article.sourceLabel} · listening edition`
-    : article.source === "wikipedia" ? `From ${article.lang}.wikipedia.org` : `From ${article.sourceLabel}`;
+    : article.source === "wikipedia"
+      ? `From ${article.lang}.wikipedia.org`
+      : article.source === "local"
+        ? "Private PDF · on this device"
+        : `From ${article.sourceLabel}${article.provenanceLabel ? ` · via ${article.provenanceLabel}` : ""}`;
   elements.sourceLink.hidden = !article.sourceUrl;
   elements.sourceLink.href = article.sourceUrl || "#";
-  elements.sourceLink.textContent = article.kind === "book" ? `Edition at ${article.sourceLabel} ↗` : "Original article ↗";
+  elements.sourceLink.textContent = article.kind === "book"
+    ? `Edition at ${article.sourceLabel} ↗`
+    : article.provenanceLabel ? `Copy at ${article.provenanceLabel} ↗` : "Original article ↗";
+  elements.originalSourceLink.hidden = !article.originalSourceUrl;
+  elements.originalSourceLink.href = article.originalSourceUrl || "#";
+  elements.originalSourceLink.textContent = "Original page ↗";
   elements.nowTitle.textContent = article.title;
   elements.outlineLabel.textContent = article.kind === "book" ? "Chapters" : "In this article";
   elements.endLabel.textContent = article.kind === "book" ? "End of the book." : "That’s the clean version.";
   elements.readingNoteText.textContent = article.kind === "book"
     ? "Footnotes, endnotes, navigation, and decorative matter have been left out of narration."
+    : article.source === "local"
+      ? "Selectable text was extracted from this PDF on your device. Citations, tables, and references have been left out where detected."
     : "Footnotes, citation numbers, tables, and references have been removed from narration.";
 
   const count = state.chunks.at(-1)?.startWord + state.chunks.at(-1)?.wordCount || 0;
@@ -3344,7 +3492,11 @@ function activateWork(work, { historyMode = "push" } = {}) {
   if (state.currentIndex > 0) showToast(`Ready to resume ${work.title}`);
 }
 
-async function loadArticle(rawInput, { historyMode = "push" } = {}) {
+async function loadArticle(rawInput, {
+  historyMode = "push",
+  originalSourceUrl = "",
+  provenanceLabel = "",
+} = {}) {
   let parsed;
   try {
     parsed = parseArticleInput(rawInput);
@@ -3371,10 +3523,33 @@ async function loadArticle(rawInput, { historyMode = "push" } = {}) {
       })
       : await fetchArticle(parsed.title, parsed.lang, true, { signal: controller.signal });
     if (controller.signal.aborted || requestId !== state.contentRequestId) return;
+    if (parsed.type === "web" && originalSourceUrl) {
+      article.originalSourceUrl = normalizePublicArticleUrl(originalSourceUrl) || "";
+      article.provenanceLabel = cleanText(provenanceLabel);
+    }
     await cacheWork(article).catch(() => {});
     activateWork(article, { historyMode });
   } catch (error) {
     if (isAbortError(error)) return;
+    const recoverableCodes = new Set(["access-denied", "missing", "non-html", "unavailable", "unreadable", "limited"]);
+    if (
+      parsed.type === "web"
+      && !originalSourceUrl
+      && error instanceof ArticleImportError
+      && recoverableCodes.has(error.code)
+    ) {
+      elements.loadingDetail.textContent = "Checking public archives and open-access repositories";
+      const alternatives = await fetchRecoveryAlternatives(parsed.url, {
+        doi: error.doi || doiFromArticleUrl(parsed.url),
+        includeArchive: error.code === "missing" || error.code === "unavailable",
+        signal: controller.signal,
+      }).catch(() => []);
+      if (controller.signal.aborted || requestId !== state.contentRequestId) return;
+      if (alternatives.length) {
+        showRecoveryOptions(alternatives, parsed.url);
+        return;
+      }
+    }
     showToast(error.message || "I couldn’t prepare that article.");
   } finally {
     finishContentTask(controller, requestId);
@@ -3545,9 +3720,9 @@ elements.nowPlayingButton.addEventListener("click", () => {
   showReaderView();
   if (state.article) history.pushState(routeStateForWork(state.article), "", routeForWork(state.article, location.pathname));
 });
-elements.importButton.addEventListener("click", () => elements.epubInput.click());
-elements.importInlineButton.addEventListener("click", () => elements.epubInput.click());
-elements.epubInput.addEventListener("change", () => importEpub(elements.epubInput.files?.[0]));
+elements.importButton.addEventListener("click", () => elements.documentInput.click());
+elements.importInlineButton.addEventListener("click", () => elements.documentInput.click());
+elements.documentInput.addEventListener("change", () => importDocument(elements.documentInput.files?.[0]));
 elements.chaptersButton.addEventListener("click", () => elements.chaptersSheet.showModal());
 
 elements.catalogSearch.addEventListener("submit", (event) => {

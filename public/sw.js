@@ -1,4 +1,4 @@
-const SHELL_CACHE = "hear-shell-v1";
+const SHELL_CACHE = "hear-shell-v2";
 const SHELL_URLS = ["./", "./manifest.webmanifest", "./favicon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
@@ -14,7 +14,7 @@ self.addEventListener("activate", (event) => {
 });
 
 function isShellAsset(requestUrl) {
-  return requestUrl.origin === self.location.origin && /\.(?:js|css|svg|webmanifest|woff2?)$/i.test(requestUrl.pathname);
+  return requestUrl.origin === self.location.origin && /\.(?:m?js|css|svg|webmanifest|woff2?)$/i.test(requestUrl.pathname);
 }
 
 self.addEventListener("fetch", (event) => {

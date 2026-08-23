@@ -2,14 +2,16 @@
 
 ![hear home screen](docs/images/hear.png)
 
-hear is a private, browser-based listening library for web articles, public-domain books, and drm-free epubs. it cleans text for narration, remembers listening progress, and keeps books, audio, and preferences on this device. think amazon audible but without having to pay bezos!
+hear is a private, browser-based listening library for web articles, public-domain books, drm-free epubs, and text-based pdfs. it cleans text for narration, remembers listening progress, and keeps imported documents, audio, and preferences on this device. think amazon audible but without having to pay bezos!
 
 ## what it supports
 
 - browse standard ebooks and project gutenberg catalogs
 - open wikipedia articles without citation markers, references, tables, or navigation furniture in the narration
 - paste a public article URL from across the web and turn its Reader View-style text into listening copy
+- recover missing public pages through an attributed [Internet Archive](https://archive.org/) snapshot, and find authorized open research copies from [arXiv](https://arxiv.org/) or [Europe PMC](https://europepmc.org/)
 - import epub 2 and epub 3 files, including metadata, covers, reading order, chapters, lists, and table-based dramatic dialogue
+- import selectable-text pdfs locally, with basic two-column reading order and reference-section removal; scanned pdfs currently need OCR before import
 - save works to my library and continue up to four recent works
 - navigate by chapter, seek through a work, change playback speed, skip 15 seconds, and resume saved progress
 - use media session controls and a real `<audio>` element for natural-voice playback on iphone control center and the lock screen
@@ -35,7 +37,7 @@ safari does not expose its native “listen to page” siri voice to web page ja
 
 ## privacy
 
-imported book text, generated audio, listening history, progress, and voice preferences are not sent to a speech service. public web pages are fetched through Hear only when the listener opens their URL so sites that block browser CORS can still work; the response is not cached at the server. cleaned works use indexeddb, while preferences and progress use browser storage. source links and attribution remain attached to every work.
+imported epub and pdf text, generated audio, listening history, progress, and voice preferences are not sent to a speech service. public web pages are fetched through Hear only when the listener opens their URL so sites that block browser CORS can still work; the response is not cached at the server. archive and open-access lookups send only the requested public URL or DOI to the named repository. cleaned works use indexeddb, while preferences and progress use browser storage. source links and attribution remain attached to every work.
 
 ## run locally
 
@@ -56,7 +58,7 @@ standard ebooks:   ?source=standard&book=jane-austen/pride-and-prejudice
 project gutenberg: ?source=gutenberg&book=1342
 ```
 
-imported epubs do not create shareable urls because their contents stay in that browser.
+imported epubs and pdfs do not create shareable urls because their contents stay in that browser.
 
 ## webgpu stress test
 

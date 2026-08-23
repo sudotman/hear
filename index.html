@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta
       name="description"
-      content="Listen to EPUBs, public-domain books, and clean web articles with a private voice on your device."
+      content="Listen to PDFs, EPUBs, public-domain books, and clean web articles with a private voice on your device."
     />
     <meta name="theme-color" content="#f1eee5" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -41,7 +41,7 @@
           <span class="mobile-label">Library</span>
         </button>
         <button class="text-button" id="import-button" type="button">
-          <span class="desktop-label">Import EPUB</span>
+          <span class="desktop-label">Import EPUB or PDF</span>
           <span class="mobile-label">Import</span>
         </button>
         <button class="icon-button" id="share-button" type="button" aria-label="Share this work" hidden>
@@ -57,7 +57,7 @@
             <p class="eyebrow">open source, private, offline ;)</p>
             <h1 id="start-title">Books and articles, <em>spoken.</em></h1>
             <p class="start-deck">
-              Find a public-domain book, open an article from the web, or bring your own EPUB.
+              Find a public-domain book, open an article from the web, or bring your own EPUB or PDF.
             </p>
 
             <div class="search-mode" role="tablist" aria-label="Choose what to search">
@@ -76,7 +76,7 @@
 
             <div class="discovery-note">
               <p id="discovery-hint">Search Standard Ebooks and Project Gutenberg.</p>
-              <button type="button" id="import-inline-button">Import an EPUB <span>↗</span></button>
+              <button type="button" id="import-inline-button">Import EPUB or PDF <span>↗</span></button>
               <button type="button" id="setup-button" hidden>Add the article shortcut <span>↗</span></button>
             </div>
 
@@ -121,7 +121,7 @@
         </section>
 
         <footer class="library-footer">
-          <p>Natural voice generation, EPUB parsing, listening history, and progress stay on your device.</p>
+          <p>Natural voice generation, EPUB/PDF parsing, listening history, and progress stay on your device.</p>
           <p>Every article stays attributed and linked to its publisher. Books remain linked to <a href="https://standardebooks.org/" target="_blank" rel="noreferrer">Standard Ebooks</a> and <a href="https://www.gutenberg.org/" target="_blank" rel="noreferrer">Project Gutenberg</a>.</p>
         </footer>
       </section>
@@ -136,6 +136,7 @@
               <span id="duration-label">— min listen</span>
               <span id="word-count-label">— words</span>
               <a id="source-link" href="#" target="_blank" rel="noreferrer">Original source ↗</a>
+              <a id="original-source-link" href="#" target="_blank" rel="noreferrer" hidden>Original page ↗</a>
             </div>
             <button class="hero-play" id="hero-play" type="button">
               <span class="hero-play-icon" aria-hidden="true">
@@ -226,7 +227,7 @@
 
     <p class="sr-only" id="player-announcement" role="status" aria-live="polite"></p>
 
-    <input id="epub-input" type="file" accept=".epub,application/epub+zip" hidden aria-hidden="true" tabindex="-1" />
+    <input id="document-input" type="file" accept=".epub,.pdf,application/epub+zip,application/pdf" hidden aria-hidden="true" tabindex="-1" />
 
     <dialog class="sheet chapters-sheet" id="chapters-sheet" aria-labelledby="chapters-sheet-title">
       <div class="sheet-head">
@@ -401,6 +402,21 @@
       <a class="bookmarklet" id="bookmarklet-link" href="#">Listen with Hear <span>↗</span></a>
       <p class="setup-fineprint">The bookmarklet works without Apple Shortcuts. On iPhone or iPad, bookmark this page, edit the bookmark, then replace its address with the code copied below.</p>
       <button class="copy-shortcut" id="copy-bookmarklet" type="button">Copy shortcut code</button>
+    </dialog>
+
+    <dialog class="sheet recovery-sheet" id="recovery-sheet" aria-labelledby="recovery-title" aria-describedby="recovery-description">
+      <div class="sheet-head">
+        <div>
+          <p class="eyebrow">Another public edition</p>
+          <h2 id="recovery-title">A readable copy<br />is available.</h2>
+        </div>
+        <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+        </button>
+      </div>
+      <p class="recovery-description" id="recovery-description">Choose the public repository you want Hear to open.</p>
+      <div class="recovery-options" id="recovery-options"></div>
+      <p class="recovery-note">Hear shows the repository and keeps the original page attached for attribution.</p>
     </dialog>
 
     <div class="loading-view" id="loading-view" hidden aria-busy="true">

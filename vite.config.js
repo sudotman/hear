@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { allowedCoverUrl } from "./cover-policy.js";
 import { standardCatalogSource } from "./standard-catalog-policy.js";
 import { onRequestGet as handleArticleRequest } from "./functions/article.js";
+import { onRequestGet as handleRecoveryRequest } from "./functions/recover.js";
 
 // Vite plugin to ensure WebKit compatibility: phonemizer's bundled
 // espeak-ng data loader uses `for await (const x of readableStream)`
@@ -137,19 +138,40 @@ function localArticleProxy() {
   };
 }
 
+function localRecoveryProxy() {
+  return {
+    name: "hear-local-recovery-proxy",
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        const requestUrl = new URL(request.url || "/", "http://localhost");
+        if (requestUrl.pathname !== "/recover") {
+          next();
+          return;
+        }
+        const result = await handleRecoveryRequest({ request: new Request(requestUrl.href) });
+        response.statusCode = result.status;
+        result.headers.forEach((value, name) => response.setHeader(name, value));
+        response.end(Buffer.from(await result.arrayBuffer()));
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [webkitReadableStreamPatch(), localCoverProxy(), localCatalogProxy(), localArticleProxy()],
+  plugins: [webkitReadableStreamPatch(), localCoverProxy(), localCatalogProxy(), localArticleProxy(), localRecoveryProxy()],
   base: "./",
   server: {
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
+      "Cross-Origin-Resource-Policy": "same-origin",
     },
   },
   preview: {
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "require-corp",
+      "Cross-Origin-Resource-Policy": "same-origin",
     },
   },
   worker: {
