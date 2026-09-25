@@ -31,7 +31,7 @@ i personal recommend kitten-mini for the smoothest playback
 
 the kokoro device choice (`wasm` or `webgpu`) is explicit and saved. webgpu is probed only after choosing kokoro + webgpu, with a cached probe, a `gpu in navigator` guard, an android warning, and fallback to wasm. the active model row shows the selected repository, dtype, and device.
 
-the first kitten or kokoro playback may download about 60–100 mb. models are cached in the browser, and nothing downloads until the user chooses a neural voice. generation reports the file, percentage, backend, segment, and progress state. generated wavs are stored in indexeddb by text, model, voice, speed, and dtype. the worker prioritizes current, next, and background segments and discards stale results after seeking or changing voice settings.
+the first kitten or kokoro playback may download about 60–100 mb. models are cached in the browser, and nothing downloads until the user chooses a neural voice. generation reports the file, percentage, backend, passage, and progress state. generated sentences are stored in indexeddb by text, model, voice, speed, and dtype. playback generates one sentence at a time just ahead of the listener, stitches ready sentences into longer clips with their pauses built in, and keeps the audio session alive with silence while it waits, so it survives the lock screen.
 
 safari does not expose its native “listen to page” siri voice to web page javascript. it can still be used from safari's page menu on hear's cleaned reader view.
 

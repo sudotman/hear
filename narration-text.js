@@ -63,3 +63,7 @@ export function segmentNarrationSentences(text, lang) {
 
   return sentences.flatMap((sentence) => splitLongText(sentence));
 }
+
+export function countWords(text) {
+  return String(text || "").match(/[\p{L}\p{N}]+(?:[’'-][\p{L}\p{N}]+)*/gu)?.length || 1;
+}

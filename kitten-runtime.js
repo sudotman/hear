@@ -2,9 +2,9 @@ import * as ort from "onnxruntime-web/wasm";
 import wasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import wasmModuleUrl from "onnxruntime-web/ort-wasm-simd-threaded.mjs?url";
 import { phonemize } from "phonemizer";
+import { fetchModelFile } from "./model-fetch.js";
 
 const SAMPLE_RATE = 24_000;
-const DEFAULT_MODEL_ROOT = "https://huggingface.co/onnx-community/KittenTTS-Nano-v0.8-ONNX/resolve/main";
 const DEFAULT_MODEL_ID = "onnx-community/KittenTTS-Nano-v0.8-ONNX";
 const SYMBOLS = [
   "$",
@@ -70,41 +70,6 @@ async function inflateRaw(bytes) {
 
 const KITTEN_CACHE_NAME = "kitten-cache";
 
-async function getKittenCache() {
-  try {
-    if (typeof caches === "undefined") return null;
-    return await caches.open(KITTEN_CACHE_NAME);
-  } catch {
-    return null;
-  }
-}
-
-async function tryGetCachedBuffer(url, onProgress, fileLabel) {
-  const cache = await getKittenCache();
-  if (!cache) return null;
-  try {
-    const hit = await cache.match(url);
-    if (hit) {
-      onProgress?.({ status: "cached", file: fileLabel, loaded: 0, total: 0, progress: 0, cached: true });
-      const buf = await hit.arrayBuffer();
-      onProgress?.({ status: "cached", file: fileLabel, loaded: buf.byteLength, total: buf.byteLength, progress: 100, cached: true });
-      return buf;
-    }
-  } catch {}
-  return null;
-}
-
-async function putCachedBuffer(url, buffer, responseHeaders) {
-  const cache = await getKittenCache();
-  if (!cache) return;
-  try {
-    const headers = new Headers(responseHeaders || {});
-    // Preserve content-type if known, ensure cacheable
-    if (!headers.has("content-length")) headers.set("content-length", String(buffer.byteLength));
-    await cache.put(url, new Response(buffer, { headers }));
-  } catch {}
-}
-
 async function parseNpzVoices(buffer) {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -152,56 +117,21 @@ async function parseNpzVoices(buffer) {
 }
 
 async function loadNpzVoices(url, onProgress) {
-  const buffer = await fetchWithProgress(url, onProgress, "voices.npz");
+  const buffer = await fetchModelFile(url, { cacheName: KITTEN_CACHE_NAME, file: "voices.npz", onProgress });
   return parseNpzVoices(buffer);
 }
 
-async function fetchWithProgress(url, onProgress, fileLabel = "onnx/model.onnx") {
-  onProgress?.({ status: "progress", file: fileLabel, loaded: 0, total: 0, progress: 0 });
-  // Serve from Cache API if present – reports as cached so UI can say Loading [cached]
-  const cached = await tryGetCachedBuffer(url, onProgress, fileLabel);
-  if (cached) return cached;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Could not download ${fileLabel} (${response.status}).`);
-  const contentRangeTotal = response.headers.get("content-range")?.match(/\/(\d+)$/)?.[1];
-  const total = [
-    response.headers.get("content-length"),
-    response.headers.get("x-linked-size"),
-    response.headers.get("x-xet-content-length"),
-    contentRangeTotal,
-  ].map(Number).find((value) => Number.isFinite(value) && value > 0) || 0;
-  if (!response.body) {
-    const buf = await response.arrayBuffer();
-    putCachedBuffer(url, buf, response.headers).catch(() => {});
-    onProgress?.({ status: "progress", file: fileLabel, loaded: buf.byteLength, total: buf.byteLength, progress: 100 });
-    return buf;
-  }
-  const reader = response.body.getReader();
-  let joined = new Uint8Array(total || 1024 * 1024);
-  let loaded = 0;
-  let lastReport = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (loaded + value.length > joined.length) {
-      const expanded = new Uint8Array(Math.max(loaded + value.length, joined.length * 2));
-      expanded.set(joined.subarray(0, loaded));
-      joined = expanded;
-    }
-    joined.set(value, loaded);
-    loaded += value.length;
-    const now = performance.now();
-    if (now - lastReport >= 80) {
-      lastReport = now;
-      onProgress?.({ status: "progress", file: fileLabel, loaded, total, progress: total ? (loaded / total) * 100 : null });
-    }
-  }
-  const buffer = loaded === joined.byteLength ? joined.buffer : joined.buffer.slice(0, loaded);
-  // Persist for next load before reporting final progress
-  putCachedBuffer(url, buffer, response.headers).catch(() => {});
-  // Ensure final 100% is reported
-  onProgress?.({ status: "progress", file: fileLabel, loaded, total: loaded, progress: 100 });
-  return buffer;
+async function fetchJson(url) {
+  const buffer = await fetchModelFile(url, { cacheName: KITTEN_CACHE_NAME, file: url.split("/").pop() });
+  return JSON.parse(new TextDecoder().decode(buffer));
+}
+
+// Python KittenTTS chunk_text() → ensure_punctuation(): a chunk that does not
+// end in prosodic punctuation gets a trailing comma before synthesis.
+function ensurePunctuation(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  return ".!?,;:".includes(trimmed.at(-1)) ? trimmed : `${trimmed},`;
 }
 
 export class KittenRuntime {
@@ -224,15 +154,16 @@ export class KittenRuntime {
       : 1;
     this.onProgress?.({ status: "starting", file: "", progress: null });
     // Try kitten_config.json first, fallback to config.json for other repos
-    let config = null;
-    let configUrl = `${this.modelRoot}/kitten_config.json`;
-    let configResponse = await fetch(configUrl);
-    if (!configResponse.ok) {
-      configUrl = `${this.modelRoot}/config.json`;
-      configResponse = await fetch(configUrl);
+    let config;
+    try {
+      config = await fetchJson(`${this.modelRoot}/kitten_config.json`);
+    } catch {
+      try {
+        config = await fetchJson(`${this.modelRoot}/config.json`);
+      } catch (error) {
+        throw new Error(`Could not load Kitten config for ${this.modelId} (${error.message}).`);
+      }
     }
-    if (!configResponse.ok) throw new Error(`Could not load Kitten config for ${this.modelId} (${configResponse.status}).`);
-    config = await configResponse.json();
     // Kitten ONNX models use different keys: kitten_config has voices/model_file, config.json may not
     this.config = {
       voices: config.voices || "voices.npz",
@@ -250,11 +181,12 @@ export class KittenRuntime {
     const modelPath = this.config.model_file.startsWith("http") ? this.config.model_file : `${this.modelRoot}/${this.config.model_file}`;
     const voicesPath = this.config.voices.startsWith("http") ? this.config.voices : `${this.modelRoot}/${this.config.voices}`;
     const voicesFetch = loadNpzVoices(voicesPath, this.onProgress);
-    const modelFetch = fetchWithProgress(modelPath, this.onProgress, "onnx/model.onnx").catch(async () => {
-        const alt = `${this.modelRoot}/onnx/model.onnx`;
-        if (alt === modelPath) throw new Error(`Could not download Kitten model at ${modelPath}`);
-        return fetchWithProgress(alt, this.onProgress, "onnx/model.onnx");
-      });
+    const fetchModel = (url) => fetchModelFile(url, { cacheName: KITTEN_CACHE_NAME, file: "onnx/model.onnx", onProgress: this.onProgress });
+    const modelFetch = fetchModel(modelPath).catch(async () => {
+      const alt = `${this.modelRoot}/onnx/model.onnx`;
+      if (alt === modelPath) throw new Error(`Could not download Kitten model at ${modelPath}`);
+      return fetchModel(alt);
+    });
     const [model, voices] = await Promise.all([modelFetch, voicesFetch]);
     this.voices = voices;
     this.onProgress?.({ status: "loading", file: "onnx/model.onnx", progress: null });
@@ -288,6 +220,7 @@ export class KittenRuntime {
         .trim();
       text = normalizedText;
     }
+    text = ensurePunctuation(text);
     // Exact Python parity: single espeak call + basic_english_tokenize + TextCleaner
     onStage?.("phonemize");
     const phonemesList = await new Promise((resolve, reject) => {

@@ -163,11 +163,22 @@ test("keeps neural models idle until explicit download consent", async ({ page }
   expect(unrelatedCatalogRequests).toEqual([]);
 
   await page.locator("#voice-button").click();
-  const choices = page.locator("#model-options [data-model-choice]");
-  await expect(choices).toHaveCount(11);
-  await expect(choices.first()).toContainText("System voice");
-  await page.locator(`[data-model-choice="kitten:onnx-community/KittenTTS-Nano-v0.8-ONNX"]`).click();
-  await expect(page.locator("#active-model-label")).toContainText("onnx-community/KittenTTS-Nano-v0.8-ONNX");
+  const engines = page.locator("#engine-options [data-engine]");
+  await expect(engines).toHaveCount(3);
+  await expect(engines.first()).toHaveAttribute("aria-checked", "true");
+  await expect(engines.first()).toContainText("System voice");
+  await expect(page.locator("#model-variants")).toBeHidden();
+
+  await page.locator('#engine-options [data-engine="kitten"]').click();
+  await expect(page.locator('#engine-options [data-engine="kitten"]')).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator("#active-model-label")).toContainText("onnx-community/KittenTTS-Nano-v0.8-ONNX · fp32 · WASM");
+  await expect(page.locator("#kitten-voice-row")).toBeVisible();
+
+  // Variants stay tucked away and list only the selected engine's options.
+  await page.locator("#model-variants summary").click();
+  const variants = page.locator("#model-options [data-model-choice]:visible");
+  await expect(variants).toHaveCount(3);
+  await page.locator('[data-model-choice="kitten:onnx-community/KittenTTS-Nano-v0.8-ONNX"]').click();
   expect(modelRequests).toEqual([]);
 
   await page.locator("#preview-voice").click();
@@ -250,7 +261,7 @@ test("does not repeat paragraphs nested inside EPUB blockquotes", async ({ page 
   await expect(page.locator("#article-copy")).toContainText("Yours sincerely, etc.");
 });
 
-test("makes books and Wikipedia obvious from the homepage and displays catalog covers", async ({ page }) => {
+test("makes books and articles obvious from the homepage and displays catalog covers", async ({ page }) => {
   await mockGutenbergBook(page);
   await page.route("https://standardebooks.org/ebooks**", (route) => route.fulfill({
     contentType: "text/html",
@@ -274,9 +285,9 @@ test("makes books and Wikipedia obvious from the homepage and displays catalog c
   await expect(page.getByRole("tab", { name: "Books" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("button", { name: "Open The Odyssey by Homer" }).locator("img")).toBeVisible();
 
-  await page.getByRole("tab", { name: "Wikipedia" }).click();
-  await expect(page.getByRole("searchbox", { name: "Open a Wikipedia article" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add the Wikipedia shortcut" })).toBeVisible();
+  await page.getByRole("tab", { name: "Articles" }).click();
+  await expect(page.getByRole("searchbox", { name: "Open an article or search Wikipedia" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set up the share shortcut" })).toBeVisible();
 
   await page.getByRole("tab", { name: "Books" }).click();
   await page.getByRole("button", { name: "Open The Odyssey by Homer" }).click();

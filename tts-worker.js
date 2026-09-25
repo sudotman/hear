@@ -1,4 +1,5 @@
 import { installReadableStreamAsyncIterator } from "./stream-compat.js";
+import { floatToInt16, trimSilence } from "./neural-audio.js";
 
 // This must run before importing either neural runtime. Older WebKit supports
 // ReadableStream but not its async iterator; phonemizer initializes an async
@@ -8,7 +9,6 @@ installReadableStreamAsyncIterator();
 let runtime = null;
 let initialization = null;
 let backend = null;
-let activeEpoch = 0;
 let processing = false;
 const queue = [];
 const downloadProgress = new Map();
@@ -79,33 +79,10 @@ function postProgress(progress) {
     file: progress.file || "",
     progress: value,
     fileProgress,
+    loaded: Number(progress.loaded) || 0,
+    total: Number(progress.total) || 0,
     cached: !!progress.cached,
   });
-}
-
-function encodeWav(samples, sampleRate) {
-  const dataLength = samples.length * 2;
-  const buffer = new ArrayBuffer(44 + dataLength);
-  const view = new DataView(buffer);
-  const write = (offset, value) => [...value].forEach((character, index) => view.setUint8(offset + index, character.charCodeAt(0)));
-  write(0, "RIFF");
-  view.setUint32(4, 36 + dataLength, true);
-  write(8, "WAVE");
-  write(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  write(36, "data");
-  view.setUint32(40, dataLength, true);
-  for (let index = 0; index < samples.length; index += 1) {
-    const sample = Math.max(-1, Math.min(1, samples[index]));
-    view.setInt16(44 + index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-  }
-  return buffer;
 }
 
 async function initialize(config = backend) {
@@ -118,7 +95,16 @@ async function initialize(config = backend) {
       const { KittenRuntime } = await import("./kitten-runtime.js");
       runtime = new KittenRuntime({ onProgress: postProgress, model: backend.model, dtype: backend.dtype });
       await runtime.load();
+    } else if (backend.id === "kokoro-wasm") {
+      // Plain WASM build: transformers.js' JSEP build is unstable on iOS 26.
+      const { KokoroRuntime } = await import("./kokoro-runtime.js");
+      runtime = new KokoroRuntime({ onProgress: postProgress, model: backend.model, dtype: backend.dtype });
+      await Promise.all([
+        runtime.load(),
+        runtime.voice(backend.defaultVoice).catch((error) => console.warn("[Hear TTS] could not prefetch Kokoro voice", error)),
+      ]);
     } else {
+      // WebGPU needs transformers.js' WebGPU-enabled ONNX Runtime.
       const { KokoroTTS } = await import("kokoro-js");
       const runtimePromise = KokoroTTS.from_pretrained(backend.model, {
         dtype: backend.dtype,
@@ -152,41 +138,36 @@ async function initialize(config = backend) {
 
 async function generate(job) {
   const startedAt = performance.now();
-  const queueWaitSeconds = (startedAt - job.enqueuedAt) / 1000;
-  const postStage = (stage) => self.postMessage({
-    type: "generating",
-    id: job.id,
-    epoch: job.epoch,
-    priority: job.priority,
-    segmentKey: job.segmentKey,
+  const postStage = (stage) => self.postMessage({ type: "generating", id: job.id, backend: backend.id, stage });
+  const baseMetrics = {
     backend: backend.id,
-    stage,
-  });
+    model: backend.model,
+    dtype: backend.dtype,
+    textLength: job.text.length,
+    queueWaitSeconds: (startedAt - job.enqueuedAt) / 1000,
+  };
   try {
     const model = await initialize();
-    if (job.epoch !== activeEpoch) return;
-    let buffer;
-    let duration;
-    if (backend.id === "kitten-wasm") {
+    let audio;
+    let sampleRate;
+    if (backend.id === "kitten-wasm" || backend.id === "kokoro-wasm") {
       const output = await model.generate(job.text, { voice: job.voice, speed: job.speed, onStage: postStage });
-      duration = output.audio.length / output.samplingRate;
-      postStage("encoding");
-      buffer = encodeWav(output.audio, output.samplingRate);
+      audio = output.audio;
+      sampleRate = output.samplingRate;
     } else {
       postStage("synthesize");
       await prefetchKokoroVoice(backend.model, job.voice);
       const output = await model.generate(job.text, { voice: job.voice, speed: job.speed });
-      duration = output.audio.length / output.sampling_rate;
-      postStage("encoding");
-      buffer = output.toWav();
+      audio = output.audio;
+      sampleRate = output.sampling_rate;
     }
+    postStage("encoding");
+    const samples = floatToInt16(trimSilence(audio, sampleRate));
+    if (!samples.length) throw new Error("The voice produced no audible speech for this passage.");
+    const duration = samples.length / sampleRate;
     const generationSeconds = (performance.now() - startedAt) / 1000;
     const metrics = {
-      backend: backend.id,
-      model: backend.model,
-      dtype: backend.dtype,
-      textLength: job.text.length,
-      queueWaitSeconds,
+      ...baseMetrics,
       generationSeconds,
       audioDurationSeconds: duration,
       rtf: duration > 0 ? generationSeconds / duration : Infinity,
@@ -194,45 +175,33 @@ async function generate(job) {
       timestamp: new Date().toISOString(),
     };
     self.postMessage({ type: "metric", metric: metrics });
-    if (job.epoch !== activeEpoch) return;
-    self.postMessage({ type: "audio", id: job.id, epoch: job.epoch, buffer, duration, metrics }, [buffer]);
+    self.postMessage({ type: "audio", id: job.id, samples, sampleRate, duration, metrics }, [samples.buffer]);
   } catch (error) {
-    const generationSeconds = (performance.now() - startedAt) / 1000;
     const metrics = {
-      backend: backend.id,
-      model: backend.model,
-      dtype: backend.dtype,
-      textLength: job.text.length,
-      queueWaitSeconds,
-      generationSeconds,
+      ...baseMetrics,
+      generationSeconds: (performance.now() - startedAt) / 1000,
       audioDurationSeconds: 0,
       rtf: Infinity,
       failure: error.message || "Generation failed",
       timestamp: new Date().toISOString(),
     };
     self.postMessage({ type: "metric", metric: metrics });
-    if (job.epoch === activeEpoch) {
-      self.postMessage({ type: "generation-error", id: job.id, epoch: job.epoch, message: metrics.failure });
-    }
+    self.postMessage({ type: "generation-error", id: job.id, message: metrics.failure });
   }
 }
 
+// The page sends one sentence at a time and keeps the scheduling itself, so
+// this is a plain FIFO (a voice preview may briefly queue behind a sentence).
 async function drainQueue() {
   if (processing) return;
   processing = true;
   try {
-    while (queue.length) {
-      queue.sort((left, right) => left.priority - right.priority || left.sequence - right.sequence);
-      const job = queue.shift();
-      if (job.epoch !== activeEpoch) continue;
-      await generate(job);
-    }
+    while (queue.length) await generate(queue.shift());
   } finally {
     processing = false;
   }
 }
 
-let sequence = 0;
 self.addEventListener("message", (event) => {
   const message = event.data;
   if (message.type === "init") {
@@ -240,37 +209,10 @@ self.addEventListener("message", (event) => {
     initialize(message.backend).catch(() => {});
     return;
   }
-  if (message.type === "epoch") {
-    activeEpoch = message.epoch;
-    for (let index = queue.length - 1; index >= 0; index -= 1) {
-      if (queue[index].epoch !== activeEpoch) queue.splice(index, 1);
-    }
-    return;
-  }
-  if (message.type === "reprioritize") {
-    const job = queue.find((candidate) => (
-      candidate.epoch === message.epoch && candidate.requestKey === message.requestKey
-    ));
-    if (job) job.priority = Math.min(job.priority, message.priority ?? job.priority);
-    return;
-  }
-  if (message.type === "cancel-background") {
-    const minimumPriority = message.minimumPriority ?? 1;
-    for (let index = queue.length - 1; index >= 0; index -= 1) {
-      const job = queue[index];
-      if (job.epoch !== message.epoch || job.priority < minimumPriority) continue;
-      queue.splice(index, 1);
-      self.postMessage({
-        type: "generation-cancelled",
-        id: job.id,
-        epoch: job.epoch,
-        message: "Background generation was cancelled while playback was paused.",
-      });
-    }
-    return;
-  }
   if (message.type === "prefetch-voice") {
-    if (backend?.id?.startsWith("kokoro-")) {
+    if (backend?.id === "kokoro-wasm" && runtime?.voice) {
+      runtime.voice(message.voice).catch((error) => console.warn("[Hear TTS] could not prefetch Kokoro voice", error));
+    } else if (backend?.id?.startsWith("kokoro-")) {
       prefetchKokoroVoice(backend.model, message.voice).catch((error) => {
         console.warn("[Hear TTS] could not prefetch Kokoro voice", error);
       });
@@ -278,7 +220,7 @@ self.addEventListener("message", (event) => {
     return;
   }
   if (message.type === "generate") {
-    queue.push({ ...message, priority: message.priority ?? 2, enqueuedAt: performance.now(), sequence: sequence++ });
+    queue.push({ ...message, enqueuedAt: performance.now() });
     drainQueue().catch((error) => {
       self.postMessage({ type: "fatal", message: error.message || "The local voice worker stopped unexpectedly." });
     });
