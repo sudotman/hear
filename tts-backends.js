@@ -1,20 +1,15 @@
 import { KITTEN_DEFAULT_MODEL, KITTEN_DTYPES, KITTEN_MODELS, KOKORO_DTYPES, KOKORO_MODEL } from "./app-config.js";
 
 const WORKER_INIT_TIMEOUT_MS = 180_000;
-const GENERATION_TIMEOUT_MS = 180_000;
+const GENERATION_TIMEOUT_MS = 120_000;
 const BENCHMARK_TEXT = "A clear voice makes every good sentence easier to follow.";
 
 /**
- * @typedef {Object} AudioResult
- * @property {ArrayBuffer} buffer
+ * @typedef {Object} SpeechResult
+ * @property {Int16Array} samples
+ * @property {number} sampleRate
  * @property {number} duration
  * @property {Object} metrics
- *
- * @typedef {Object} TtsBackend
- * @property {() => Promise<void>} load
- * @property {(text: string, options?: Object) => Promise<AudioResult>} generate
- * @property {() => Promise<number>} benchmark
- * @property {() => Promise<void>} dispose
  */
 
 class WorkerTtsBackend {
@@ -25,7 +20,6 @@ class WorkerTtsBackend {
     this.loadPromise = null;
     this.requests = new Map();
     this.requestId = 0;
-    this.epoch = 0;
   }
 
   get id() {
@@ -43,9 +37,13 @@ class WorkerTtsBackend {
     if (this.worker && this.loadPromise) return this.loadPromise;
     this.worker = new Worker(new URL("./tts-worker.js", import.meta.url), { type: "module" });
     this.loadPromise = new Promise((resolve, reject) => {
+      // dispose() during a download must settle this promise, or callers
+      // awaiting the engine would wait forever.
+      this.rejectLoad = reject;
       const timer = window.setTimeout(() => {
         const error = new Error(`${this.config.label} took too long to load.`);
         error.name = "TimeoutError";
+        error.fatal = true;
         reject(error);
         this.dispose();
       }, WORKER_INIT_TIMEOUT_MS);
@@ -53,11 +51,12 @@ class WorkerTtsBackend {
       this.worker.addEventListener("message", (event) => {
         const message = event.data;
         if (message.type === "progress") {
-          this.callbacks.onProgress?.(message);
+          this.callbacks.onProgress?.({ ...message, backend: this.id });
           return;
         }
         if (message.type === "ready") {
           window.clearTimeout(timer);
+          this.rejectLoad = null;
           this.callbacks.onReady?.(message);
           resolve();
           return;
@@ -66,7 +65,7 @@ class WorkerTtsBackend {
           this.callbacks.onGenerating?.(message);
           return;
         }
-        if (message.type === "audio" || message.type === "generation-error" || message.type === "generation-cancelled") {
+        if (message.type === "audio" || message.type === "generation-error") {
           this.finishRequest(message);
           return;
         }
@@ -74,6 +73,7 @@ class WorkerTtsBackend {
         if (message.type === "fatal") {
           window.clearTimeout(timer);
           const error = new Error(message.message || `${this.config.label} stopped unexpectedly.`);
+          error.fatal = true;
           reject(error);
           this.rejectAll(error);
           this.callbacks.onFatal?.(error);
@@ -83,13 +83,13 @@ class WorkerTtsBackend {
       this.worker.addEventListener("error", (event) => {
         window.clearTimeout(timer);
         const error = new Error(event.message || `${this.config.label} stopped unexpectedly.`);
+        error.fatal = true;
         reject(error);
         this.rejectAll(error);
         this.callbacks.onFatal?.(error);
       });
 
       this.worker.postMessage({ type: "init", backend: this.config });
-      this.worker.postMessage({ type: "epoch", epoch: this.epoch });
     });
     return this.loadPromise;
   }
@@ -103,35 +103,16 @@ class WorkerTtsBackend {
       request.reject(new Error(message.message || "This passage could not be generated."));
       return;
     }
-    if (message.type === "generation-cancelled") {
-      const error = new Error(message.message || "Background generation was cancelled.");
-      error.name = "BackgroundGenerationCancelled";
-      request.reject(error);
-      return;
-    }
-    if (message.epoch !== request.epoch) {
-      const error = new Error("Discarded audio from an earlier playback position.");
-      error.name = "StaleGenerationError";
-      request.reject(error);
-      return;
-    }
-    request.resolve({ buffer: message.buffer, duration: message.duration, metrics: message.metrics });
+    request.resolve({
+      samples: message.samples,
+      sampleRate: message.sampleRate,
+      duration: message.duration,
+      metrics: message.metrics,
+    });
   }
 
-  async generate(text, {
-    voice = this.config.defaultVoice,
-    speed = 1,
-    priority = 2,
-    epoch = this.epoch,
-    segmentKey = "",
-    requestKey = "",
-  } = {}) {
+  async synthesize(text, { voice = this.config.defaultVoice, speed = 1 } = {}) {
     await this.load();
-    if (epoch !== this.epoch) {
-      const error = new Error("Discarded audio from an earlier playback position.");
-      error.name = "StaleGenerationError";
-      throw error;
-    }
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
@@ -141,18 +122,9 @@ class WorkerTtsBackend {
         error.name = "TimeoutError";
         reject(error);
       }, GENERATION_TIMEOUT_MS);
-      this.requests.set(id, { resolve, reject, timer, epoch, priority, requestKey });
-      this.worker.postMessage({ type: "generate", id, text, voice, speed, priority, epoch, segmentKey, requestKey });
+      this.requests.set(id, { resolve, reject, timer });
+      this.worker.postMessage({ type: "generate", id, text, voice, speed });
     });
-  }
-
-  reprioritize(requestKey, priority, epoch = this.epoch) {
-    if (!requestKey || !this.worker) return;
-    this.worker.postMessage({ type: "reprioritize", requestKey, priority, epoch });
-  }
-
-  cancelBackground(epoch = this.epoch) {
-    this.worker?.postMessage({ type: "cancel-background", epoch, minimumPriority: 1 });
   }
 
   prefetchVoice(voice) {
@@ -161,21 +133,8 @@ class WorkerTtsBackend {
   }
 
   async benchmark() {
-    const result = await this.generate(BENCHMARK_TEXT, { priority: 0, epoch: this.epoch });
+    const result = await this.synthesize(BENCHMARK_TEXT);
     return result.metrics.rtf;
-  }
-
-  setEpoch(epoch) {
-    this.epoch = epoch;
-    for (const [id, request] of this.requests) {
-      if (request.epoch === epoch) continue;
-      window.clearTimeout(request.timer);
-      const error = new Error("Discarded audio from an earlier playback position.");
-      error.name = "StaleGenerationError";
-      request.reject(error);
-      this.requests.delete(id);
-    }
-    this.worker?.postMessage({ type: "epoch", epoch });
   }
 
   rejectAll(error) {
@@ -190,6 +149,8 @@ class WorkerTtsBackend {
     const error = new Error(`${this.config.label} was restarted.`);
     error.name = "BackendRestartError";
     this.rejectAll(error);
+    this.rejectLoad?.(error);
+    this.rejectLoad = null;
     this.worker?.postMessage({ type: "dispose" });
     this.worker?.terminate();
     this.worker = null;
@@ -251,30 +212,5 @@ export class KittenWasm extends WorkerTtsBackend {
       dtype,
       defaultVoice: "Bella",
     }, callbacks);
-  }
-}
-
-export class SystemVoice {
-  constructor({ synth = window.speechSynthesis, voice = null } = {}) {
-    this.id = "system";
-    this.synth = synth;
-    this.voice = voice;
-  }
-
-  async load() {}
-
-  async generate(text, { speed = 1 } = {}) {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = speed;
-    if (this.voice) utterance.voice = this.voice;
-    return { utterance, duration: 0, metrics: { backend: "system", rtf: 0 } };
-  }
-
-  async benchmark() {
-    return 0;
-  }
-
-  async dispose() {
-    this.synth.cancel();
   }
 }

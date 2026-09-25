@@ -7,7 +7,7 @@
       name="description"
       content="Listen to PDFs, EPUBs, public-domain books, and clean web articles with a private voice on your device."
     />
-    <meta name="theme-color" content="#f1eee5" />
+    <meta name="theme-color" content="#f3f0e8" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Hear — the written world, spoken</title>
@@ -16,72 +16,73 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
-  <body>
+  <body class="library-open">
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <header class="site-header" data-condensed="false">
+    <header class="site-header">
       <a class="brand" href="#library" id="brand-link" aria-label="Hear library">
-        <span class="brand-mark" aria-hidden="true">
-          <i></i><i></i><i></i><i></i><i></i>
-        </span>
-        <span>hear</span>
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="brand-name">hear</span>
       </a>
 
       <form class="header-search" id="header-search" role="search">
         <label class="sr-only" for="header-query">Search Wikipedia or open an article link</label>
-        <input id="header-query" autocomplete="off" spellcheck="false" placeholder="Search or paste an article link…" />
-        <button type="submit" aria-label="Search or open article">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+        <input id="header-query" type="search" autocomplete="off" spellcheck="false" placeholder="Search or paste an article link" />
+        <button type="submit" class="icon-button" aria-label="Search or open article">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>
         </button>
       </form>
 
-      <div class="header-actions">
-        <button class="text-button header-library-button" id="library-button" type="button">
-          <span class="desktop-label">Browse library</span>
-          <span class="mobile-label">Library</span>
+      <nav class="header-actions" aria-label="Site">
+        <button class="header-link" id="library-button" type="button" hidden>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M10 4v16M15 5l4 15" /></svg>
+          <span>Library</span>
         </button>
-        <button class="text-button" id="import-button" type="button">
-          <span class="desktop-label">Import EPUB or PDF</span>
-          <span class="mobile-label">Import</span>
+        <button class="header-link" id="import-button" type="button">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5" /></svg>
+          <span class="label-long">Import EPUB or PDF</span>
+          <span class="label-short">Import</span>
         </button>
         <button class="icon-button" id="share-button" type="button" aria-label="Share this work" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m0 0L7.5 7.5M12 3l4.5 4.5M5 12v7h14v-7" /></svg>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 12v7h14v-7" /></svg>
         </button>
-      </div>
+      </nav>
     </header>
 
     <main id="main">
-      <section class="start-view library-view" id="start-view" aria-labelledby="start-title">
+      <section class="library-view" id="start-view" aria-labelledby="start-title">
         <div class="library-hero">
-          <div class="library-hero-copy">
-            <p class="eyebrow">open source, private, offline ;)</p>
+          <div class="library-hero-inner">
+            <p class="eyebrow">Private listening, voiced on your device</p>
             <h1 id="start-title">Books and articles, <em>spoken.</em></h1>
             <p class="start-deck">
-              Find a public-domain book, open an article/research paper from the web, or bring your own EPUB or PDF.
+              Find a public-domain book, open an article or research paper from the web, or bring your own EPUB or PDF.
             </p>
 
-            <div class="search-mode" role="tablist" aria-label="Choose what to search">
-              <button type="button" role="tab" data-search-mode="books" aria-selected="true" aria-controls="catalog-search">Books</button>
-              <button type="button" role="tab" data-search-mode="articles" aria-selected="false" aria-controls="catalog-search" tabindex="-1">Articles</button>
-            </div>
+            <div class="discovery">
+              <div class="search-mode" role="tablist" aria-label="Choose what to search">
+                <button type="button" role="tab" data-search-mode="books" aria-selected="true" aria-controls="catalog-search">Books</button>
+                <button type="button" role="tab" data-search-mode="articles" aria-selected="false" aria-controls="catalog-search" tabindex="-1">Articles</button>
+              </div>
 
-            <form class="catalog-search" id="catalog-search" role="search">
-              <label class="sr-only" id="catalog-search-label" for="catalog-query">Search public-domain books</label>
-              <input id="catalog-query" type="search" autocomplete="off" spellcheck="false" placeholder="Title, author, or subject" required />
-              <button type="submit" id="catalog-submit" aria-label="Search public-domain books">
-                <span id="catalog-submit-label">Search books</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
-              </button>
-            </form>
+              <form class="catalog-search" id="catalog-search" role="search">
+                <label class="sr-only" id="catalog-search-label" for="catalog-query">Search public-domain books</label>
+                <input id="catalog-query" type="search" autocomplete="off" spellcheck="false" placeholder="Title, author, or subject" required />
+                <button type="submit" id="catalog-submit" aria-label="Search public-domain books">
+                  <span id="catalog-submit-label">Search</span>
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>
+                </button>
+              </form>
 
-            <div class="discovery-note">
-              <p id="discovery-hint">Search Standard Ebooks and Project Gutenberg.</p>
-              <button type="button" id="import-inline-button">Import EPUB or PDF <span>↗</span></button>
-              <button type="button" id="setup-button" hidden>Add the article shortcut <span>↗</span></button>
+              <div class="discovery-note">
+                <p id="discovery-hint">Searches Standard Ebooks and Project Gutenberg.</p>
+                <button type="button" class="text-link" id="setup-button" hidden>Set up the share shortcut</button>
+              </div>
             </div>
 
             <aside class="continue-listening" id="continue-listening" aria-labelledby="continue-title" hidden>
-              <p class="eyebrow" id="continue-title">Continue listening</p>
+              <h2 class="eyebrow" id="continue-title">Continue listening</h2>
               <div class="continue-list" id="continue-list"></div>
             </aside>
           </div>
@@ -89,39 +90,39 @@
 
         <section class="catalog-section" aria-labelledby="catalog-title">
           <header class="catalog-heading">
-            <div>
-              <p class="eyebrow" id="catalog-eyebrow">Open shelves</p>
-              <h2 id="catalog-title">Books worth hearing</h2>
-            </div>
-            <div class="catalog-controls" id="catalog-controls">
-              <div class="source-switcher" id="source-switcher" role="group" aria-label="Book source">
-                <button type="button" data-source="all" aria-pressed="true">All</button>
-                <button type="button" data-source="standard" aria-pressed="false">Standard Ebooks</button>
-                <button type="button" data-source="gutenberg" aria-pressed="false">Gutenberg</button>
-                <button type="button" data-source="saved" aria-pressed="false">My library <span id="saved-count">0</span></button>
-              </div>
-              <div class="catalog-topics" id="catalog-topics" aria-label="Browse a collection">
-                <button type="button" data-topic="" aria-pressed="true">Popular</button>
-                <button type="button" data-topic="fiction" aria-pressed="false">Fiction</button>
-                <button type="button" data-topic="adventure" aria-pressed="false">Adventure</button>
-                <button type="button" data-topic="mystery" aria-pressed="false">Mystery</button>
-                <button type="button" data-topic="short-stories" aria-pressed="false">Short stories</button>
-                <button type="button" data-topic="philosophy" aria-pressed="false">Ideas</button>
-                <button type="button" data-topic="poetry" aria-pressed="false">Poetry</button>
-              </div>
-            </div>
+            <p class="eyebrow" id="catalog-eyebrow">Open shelves</p>
+            <h2 id="catalog-title">Books worth hearing</h2>
           </header>
-          <p class="catalog-status" id="catalog-status" role="status" aria-live="polite">Opening the shelves…</p>
-          <div class="catalog-progress" id="catalog-progress" hidden>
-            <progress id="catalog-progress-bar" max="100" value="0" aria-label="Book search progress"></progress>
-            <span id="catalog-progress-label">Checking public libraries</span>
+          <div class="catalog-controls" id="catalog-controls">
+            <div class="chips" id="catalog-topics" role="group" aria-label="Browse a collection">
+              <button type="button" data-topic="" aria-pressed="true">Popular</button>
+              <button type="button" data-topic="fiction" aria-pressed="false">Fiction</button>
+              <button type="button" data-topic="adventure" aria-pressed="false">Adventure</button>
+              <button type="button" data-topic="mystery" aria-pressed="false">Mystery</button>
+              <button type="button" data-topic="short-stories" aria-pressed="false">Short stories</button>
+              <button type="button" data-topic="philosophy" aria-pressed="false">Ideas</button>
+              <button type="button" data-topic="poetry" aria-pressed="false">Poetry</button>
+            </div>
+            <div class="segmented" id="source-switcher" role="group" aria-label="Book source">
+              <button type="button" data-source="all" aria-pressed="true">All</button>
+              <button type="button" data-source="standard" aria-pressed="false" aria-label="Standard Ebooks"><span class="label-long">Standard Ebooks</span><span class="label-short">Standard</span></button>
+              <button type="button" data-source="gutenberg" aria-pressed="false">Gutenberg</button>
+              <button type="button" data-source="saved" aria-pressed="false" aria-label="My library"><span class="label-long">My library</span><span class="label-short">Saved</span> <span class="count" id="saved-count">0</span></button>
+            </div>
+          </div>
+          <div class="catalog-status-row">
+            <p class="catalog-status" id="catalog-status" role="status" aria-live="polite">Opening the shelves…</p>
+            <div class="catalog-progress" id="catalog-progress" hidden>
+              <progress id="catalog-progress-bar" max="100" value="0" aria-labelledby="catalog-progress-label"></progress>
+              <span class="sr-only" id="catalog-progress-label">Checking public libraries</span>
+            </div>
           </div>
           <div class="book-grid" id="book-grid"></div>
-          <button class="load-more" id="load-more" type="button" hidden>Browse more books</button>
+          <button class="button button-quiet load-more" id="load-more" type="button" hidden>Show more books</button>
         </section>
 
         <footer class="library-footer">
-          <p>Natural voice generation, EPUB/PDF parsing, listening history, and progress stay on your device.</p>
+          <p>Voice generation, EPUB and PDF reading, your library, and your progress all stay on this device.</p>
           <p>Every article stays attributed and linked to its publisher. Books remain linked to <a href="https://standardebooks.org/" target="_blank" rel="noreferrer">Standard Ebooks</a> and <a href="https://www.gutenberg.org/" target="_blank" rel="noreferrer">Project Gutenberg</a>.</p>
         </footer>
       </section>
@@ -149,9 +150,6 @@
             <img id="article-image" alt="" crossorigin="anonymous" />
             <figcaption id="image-caption">Image from Wikimedia Commons</figcaption>
           </figure>
-          <div class="article-placeholder" id="article-placeholder" aria-hidden="true">
-            <span>W</span>
-          </div>
         </header>
 
         <div class="reader-layout">
@@ -163,43 +161,44 @@
           <article class="article-copy" id="article-copy"></article>
 
           <aside class="reading-note">
-            <span class="reading-note-line"></span>
             <p id="reading-note-text">Footnotes, citation numbers, tables, and references have been removed from narration.</p>
           </aside>
         </div>
 
         <footer class="article-footer">
           <p id="end-label">End of the work.</p>
-          <button type="button" id="restart-button">Listen again</button>
+          <button type="button" class="button button-on-night" id="restart-button">Listen again</button>
         </footer>
       </section>
     </main>
 
     <button class="jump-current" id="jump-to-current" type="button" hidden>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v11M7.5 11.5 12 16l4.5-4.5M6 20h12" /></svg>
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v11m-4.5-4.5L12 16l4.5-4.5M6 20h12" /></svg>
       <span>Jump to current</span>
     </button>
 
-    <section class="player" id="player" aria-label="Audio controls" hidden>
+    <section class="player" id="player" aria-label="Audio controls" data-state="idle" hidden>
       <audio id="media-audio" preload="auto" playsinline></audio>
+      <div class="player-progress" id="player-progress" hidden><i></i></div>
+
       <button class="player-now" id="now-playing-button" type="button" aria-label="Return to the current work">
         <span class="mini-cover" id="mini-cover"><span>W</span><img id="mini-cover-image" alt="" crossorigin="anonymous" hidden /></span>
         <span class="now-copy">
-          <span id="now-section">Ready to listen</span>
           <strong id="now-title">Hear</strong>
+          <span id="now-section">Ready to listen</span>
         </span>
       </button>
 
       <div class="transport">
         <div class="transport-buttons">
-          <button class="transport-small" id="back-button" type="button" aria-label="Back 15 seconds">
+          <button class="transport-skip" id="back-button" type="button" aria-label="Back 15 seconds">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8H3V4M3.7 8A9 9 0 1 1 3 15" /><text x="8" y="16">15</text></svg>
           </button>
           <button class="play-button" id="play-button" type="button" aria-label="Play">
             <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5V7Z" /></svg>
             <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7v10M15 7v10" /></svg>
           </button>
-          <button class="transport-small" id="forward-button" type="button" aria-label="Forward 15 seconds">
+          <button class="transport-skip" id="forward-button" type="button" aria-label="Forward 15 seconds">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 8h4V4m-.7 4A9 9 0 1 0 21 15" /><text x="6.8" y="16">15</text></svg>
           </button>
         </div>
@@ -212,15 +211,14 @@
       </div>
 
       <div class="player-options">
-        <button class="chapters-button" id="chapters-button" type="button" aria-label="Choose a chapter">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14" /></svg>
-          <span>Chapters</span>
+        <button class="player-option" id="chapters-button" type="button" aria-label="Choose a chapter">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9" /></svg>
+          <span class="player-option-label">Chapters</span>
         </button>
-        <button class="rate-button" id="rate-button" type="button" aria-label="Change playback speed">1×</button>
-        <button class="voice-button" id="voice-button" type="button" aria-label="Voice and playback settings">
+        <button class="player-option rate-button" id="rate-button" type="button" aria-label="Change playback speed">1×</button>
+        <button class="player-option voice-button" id="voice-button" type="button" aria-label="Voice and playback settings">
           <span class="voice-orb" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="voice-label"><small id="voice-type">Natural voice</small><strong id="voice-name">Heart</strong></span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" /></svg>
+          <span class="voice-label"><strong id="voice-name">System voice</strong><small id="voice-type">System</small></span>
         </button>
       </div>
     </section>
@@ -229,202 +227,224 @@
 
     <input id="document-input" type="file" accept=".epub,.pdf,application/epub+zip,application/pdf" hidden aria-hidden="true" tabindex="-1" />
 
-    <dialog class="sheet chapters-sheet" id="chapters-sheet" aria-labelledby="chapters-sheet-title">
-      <div class="sheet-head">
+    <dialog class="sheet" id="chapters-sheet" aria-labelledby="chapters-sheet-title">
+      <header class="sheet-head">
         <div>
           <p class="eyebrow">Reading order</p>
-          <h2 id="chapters-sheet-title">Choose a chapter.</h2>
+          <h2 tabindex="-1" autofocus id="chapters-sheet-title">Choose a chapter</h2>
         </div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
-      </div>
+      </header>
       <nav class="chapter-list" id="chapter-list" aria-label="Chapters"></nav>
     </dialog>
 
     <dialog class="sheet" id="voice-sheet" aria-labelledby="voice-sheet-title">
-      <div class="sheet-head">
+      <header class="sheet-head">
         <div>
-          <p class="eyebrow">Listening preferences</p>
-          <h2 id="voice-sheet-title">Make it sound right.</h2>
+          <p class="eyebrow">Listening</p>
+          <h2 tabindex="-1" autofocus id="voice-sheet-title">Voice &amp; speed</h2>
         </div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
-      </div>
+      </header>
 
-      <section class="model-picker" aria-labelledby="model-picker-title">
-        <div class="model-picker-head">
-          <div><span id="model-picker-title">Playback model</span><small id="engine-description">Every available option, ordered by family and download size.</small></div>
-          <small>Instant → efficient → higher fidelity</small>
+      <section class="sheet-section" aria-labelledby="engine-title">
+        <div class="section-head">
+          <h3 id="engine-title">Voice engine</h3>
         </div>
-        <div class="model-options" id="model-options" role="radiogroup" aria-label="Playback model"></div>
-        <p class="active-model"><span>Selected</span><small id="active-model-label">System voice · instant · no download</small></p>
+        <p class="section-lede" id="engine-description">Natural voices run entirely on this device and download only when you press play.</p>
+        <div class="option-list" id="engine-options" role="radiogroup" aria-labelledby="engine-title"></div>
+        <details class="model-variants" id="model-variants" hidden>
+          <summary><span>Model options</span><span class="summary-value" id="model-variant-summary"></span></summary>
+          <div class="option-list option-list-compact" id="model-options" role="radiogroup" aria-label="Model variant"></div>
+        </details>
+        <p class="active-model"><span class="sr-only">Selected model: </span><span id="active-model-label">System voice · instant · no download</span></p>
+        <p class="engine-status" id="engine-status" role="status" hidden></p>
       </section>
 
-      <div class="setting-row voice-select-row" id="natural-voice-row" hidden>
-        <label for="natural-voice-select"><span>Natural voice</span><small>Higher fidelity · English works</small></label>
-        <div class="voice-choice">
+      <section class="sheet-section" aria-label="Voice and pace">
+        <div class="field" id="natural-voice-row" hidden>
+          <label for="natural-voice-select">Voice</label>
           <select id="natural-voice-select">
-            <option value="af_heart">Heart · warm American · all-round</option>
-            <option value="af_bella">Bella · lively American · expressive</option>
-            <option value="bf_emma">Emma · composed British · long-form</option>
-            <option value="bm_fable">Fable · characterful British · narrative</option>
-            <option value="am_michael">Michael · grounded American · steady</option>
+            <option value="af_heart">Heart · warm American</option>
+            <option value="af_bella">Bella · lively American</option>
+            <option value="bf_emma">Emma · composed British</option>
+            <option value="bm_fable">Fable · characterful British</option>
+            <option value="am_michael">Michael · grounded American</option>
           </select>
-          <p class="voice-traits" id="voice-traits">Warm, balanced American voice · the strongest all-round choice</p>
+          <p class="field-hint" id="voice-traits">Warm and balanced — the strongest all-round choice.</p>
         </div>
-      </div>
 
-      <div class="setting-row voice-select-row" id="kitten-voice-row" hidden>
-        <label for="kitten-voice-select"><span>Kitten voice</span><small>Eight local voice profiles</small></label>
-        <div class="voice-choice">
+        <div class="field" id="kitten-voice-row" hidden>
+          <label for="kitten-voice-select">Voice</label>
           <select id="kitten-voice-select">
-            <option value="Bella">Bella · warm female</option><option value="Jasper">Jasper · warm male</option>
-            <option value="Luna">Luna · female</option><option value="Bruno">Bruno · male</option>
-            <option value="Rosie">Rosie · female</option><option value="Hugo">Hugo · male</option>
-            <option value="Kiki">Kiki · female</option><option value="Leo">Leo · male</option>
+            <option value="Bella">Bella · female</option>
+            <option value="Jasper">Jasper · male</option>
+            <option value="Luna">Luna · female</option>
+            <option value="Bruno">Bruno · male</option>
+            <option value="Rosie">Rosie · female</option>
+            <option value="Hugo">Hugo · male</option>
+            <option value="Kiki">Kiki · female</option>
+            <option value="Leo">Leo · male</option>
           </select>
-          <p class="voice-traits" id="kitten-voice-traits">Warm, efficient Kitten voice — Bella is default.</p>
+          <p class="field-hint" id="kitten-voice-traits">Kitten includes eight voices.</p>
         </div>
-      </div>
 
-      <div class="setting-row voice-select-row" id="system-voice-row">
-        <label for="voice-select"><span>System voice</span><small>Voices installed on this device</small></label>
-        <select id="voice-select"></select>
-      </div>
-
-      <div class="setting-row">
-        <label for="rate-range"><span>Speaking rate</span><small id="rate-description">Natural pace</small></label>
-        <div class="range-setting"><input id="rate-range" type="range" min="0.7" max="1.5" step="0.05" value="1" /><output id="rate-output">1×</output></div>
-      </div>
-
-      <div class="setting-row toggle-row">
-        <label for="follow-toggle"><span>Follow the narration</span><small>Bring the current paragraph into view</small></label>
-        <input id="follow-toggle" class="toggle" type="checkbox" checked />
-      </div>
-
-      <button class="advanced-launch" id="advanced-settings-button" type="button">
-        <span><strong>Storage &amp; privacy</strong><small>Saved models, generated audio, and local data</small></span><span aria-hidden="true">→</span>
-      </button>
-
-      <div class="sheet-actions">
-        <button id="preview-voice" type="button">Preview voice</button>
-        <div class="voice-notes">
-          <p id="voice-note">System voices start instantly. Natural voices download only after you choose one and press Preview or Play.</p>
-          <p class="safari-voice-tip"><strong>Prefer Apple’s voice?</strong> In Safari’s Page menu, choose <em>Listen to Page</em>. This copy is already citation-free.</p>
+        <div class="field" id="system-voice-row">
+          <label for="voice-select">Voice</label>
+          <select id="voice-select"></select>
+          <p class="field-hint">Voices installed on this device.</p>
         </div>
-      </div>
-    </dialog>
 
-    <dialog class="sheet advanced-sheet" id="advanced-sheet" aria-labelledby="advanced-sheet-title">
-      <div class="sheet-head">
-        <div><p class="eyebrow">On-device data</p><h2 id="advanced-sheet-title">Storage &amp; privacy.</h2></div>
-        <button class="sheet-close" type="button" data-close-dialog aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
-      </div>
-
-      <details class="model-details">
-        <summary>How does the natural voice work?</summary>
-        <p>Choose Kitten or Kokoro explicitly. Hear never benchmarks or downloads a model on page load. Generation, measurements, and cached passages stay on this device.</p>
-        <p>WebGPU is probed only after you choose Kokoro with WebGPU and press Preview or Play. WASM is used if that probe fails.</p>
-        <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX" target="_blank" rel="noreferrer">Kokoro model card and samples ↗</a>
-      </details>
-
-      <div class="setting-row" id="storage-row">
-        <div class="setting-label"><span>Storage &amp; cache</span><small id="storage-usage-label">Checking local storage…</small></div>
-        <div class="voice-choice storage-actions">
-          <div class="model-cache-manager" id="model-cache-manager">
-            <div class="model-cache-head"><span class="model-cache-title">Saved models</span><span class="model-cache-total" id="model-cache-total">—</span><button type="button" id="refresh-model-cache" class="text-button small ghost" aria-label="Refresh saved models">Refresh</button></div>
-            <div id="model-cache-list" class="model-cache-list" aria-live="polite"><span class="model-cache-empty">Checking saved models…</span></div>
-            <div class="model-cache-actions"><button type="button" id="clear-model-cache" class="text-button storage-button">Clear saved models</button></div>
-            <p class="voice-traits model-cache-hint">Model files remain in browser cache until removed or reclaimed by the browser.</p>
+        <div class="field">
+          <div class="field-label">
+            <label for="rate-range">Speed</label>
+            <output id="rate-output" for="rate-range">1×</output>
           </div>
-          <button type="button" id="clear-audio-cache" class="text-button storage-button">Clear generated audio</button>
-          <button type="button" id="clear-all-data" class="text-button storage-button storage-danger">Clear all Hear data</button>
-          <p class="voice-traits" id="storage-note">No text or audio is sent to a speech service.</p>
+          <input id="rate-range" type="range" min="0.7" max="1.5" step="0.05" value="1" />
+          <p class="field-hint" id="rate-description">Natural pace</p>
         </div>
-      </div>
+
+        <div class="field field-toggle">
+          <label for="follow-toggle"><span>Follow along</span><small>Keep the current paragraph in view</small></label>
+          <input id="follow-toggle" class="toggle" type="checkbox" checked />
+        </div>
+      </section>
+
+      <footer class="sheet-foot">
+        <div class="sheet-actions">
+          <button class="button button-primary" id="preview-voice" type="button">Preview voice</button>
+          <button class="text-link" id="advanced-settings-button" type="button">Storage &amp; privacy</button>
+        </div>
+        <p class="field-hint" id="voice-note">System voices start instantly. Natural voices download only when you choose one and press play.</p>
+        <p class="field-hint safari-voice-tip" id="safari-voice-tip" hidden>Prefer Apple’s own voice? In Safari’s page menu, choose <em>Listen to Page</em>; this copy is already free of citations.</p>
+      </footer>
     </dialog>
 
-    <dialog class="sheet neural-sheet" id="neural-sheet" aria-labelledby="neural-sheet-title">
-      <div class="sheet-head">
+    <dialog class="sheet" id="advanced-sheet" aria-labelledby="advanced-sheet-title">
+      <header class="sheet-head">
+        <div><p class="eyebrow">On this device</p><h2 tabindex="-1" autofocus id="advanced-sheet-title">Storage &amp; privacy</h2></div>
+        <button class="sheet-close" type="button" data-close-dialog aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+      </header>
+
+      <p class="sheet-lede" id="storage-note">No text or audio is ever sent to a speech service.</p>
+
+      <section class="sheet-section" aria-labelledby="models-title">
+        <div class="section-head">
+          <h3 id="models-title">Voice models</h3>
+          <span class="section-meta" id="model-cache-total">—</span>
+          <button type="button" id="refresh-model-cache" class="text-link" aria-label="Refresh saved models">Refresh</button>
+        </div>
+        <div id="model-cache-list" class="cache-list" aria-live="polite"><p class="cache-empty">Checking saved models…</p></div>
+        <button type="button" id="clear-model-cache" class="button button-quiet">Remove all models</button>
+      </section>
+
+      <section class="sheet-section" aria-labelledby="audio-title">
+        <div class="section-head">
+          <h3 id="audio-title">Generated audio</h3>
+        </div>
+        <p class="field-hint" id="storage-usage-label">Checking local storage…</p>
+        <button type="button" id="clear-audio-cache" class="button button-quiet">Clear generated audio</button>
+      </section>
+
+      <section class="sheet-section" aria-labelledby="reset-title">
+        <div class="section-head">
+          <h3 id="reset-title">Reset Hear</h3>
+        </div>
+        <p class="field-hint">Removes your library, listening progress, voice choices, models, and generated audio.</p>
+        <button type="button" id="clear-all-data" class="button button-danger">Clear all Hear data</button>
+      </section>
+
+      <details class="sheet-details">
+        <summary>How the natural voice works</summary>
+        <p>Kitten and Kokoro are open speech models that run inside your browser. Hear downloads a model only after you choose it and press play, then generates each sentence on this device a little ahead of where you are listening.</p>
+        <p>WebGPU is tried only after you choose it and press play; if it fails, Hear uses the standard WASM engine.</p>
+        <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX" target="_blank" rel="noreferrer">Kokoro model card ↗</a>
+      </details>
+    </dialog>
+
+    <dialog class="sheet sheet-compact" id="neural-sheet" aria-labelledby="neural-sheet-title">
+      <header class="sheet-head">
         <div>
-          <p class="eyebrow">One-time voice download</p>
-          <h2 id="neural-sheet-title">A real voice,<br />kept private.</h2>
+          <p class="eyebrow">One-time download</p>
+          <h2 tabindex="-1" autofocus id="neural-sheet-title">Download this voice?</h2>
         </div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
-      </div>
-      <div class="neural-promise">
-        <div class="download-size"><strong id="neural-download-size">—</strong><span id="neural-download-unit">MB once</span></div>
+      </header>
+      <div class="download-summary">
+        <p class="download-size"><strong id="neural-download-size">—</strong> <span id="neural-download-unit">MB</span></p>
         <div>
           <p id="neural-download-model">Preparing the selected local model…</p>
           <small id="neural-download-storage">Checking available browser storage…</small>
         </div>
       </div>
-      <div class="neural-actions">
-        <button id="download-neural" type="button">Download &amp; listen</button>
-        <button type="button" data-close-dialog>Not now</button>
-      </div>
+      <p class="sheet-lede">The voice runs entirely on this device and works offline afterwards. Text is never sent to a speech service.</p>
+      <footer class="sheet-foot">
+        <div class="sheet-actions">
+          <button class="button button-primary" id="download-neural" type="button">Download &amp; listen</button>
+          <button class="button button-quiet" type="button" data-close-dialog>Not now</button>
+        </div>
+      </footer>
     </dialog>
 
-    <dialog class="sheet setup-sheet" id="setup-sheet" aria-labelledby="setup-title">
-      <div class="sheet-head">
+    <dialog class="sheet" id="setup-sheet" aria-labelledby="setup-title">
+      <header class="sheet-head">
         <div>
-          <p class="eyebrow">One-time shortcut setup</p>
-          <h2 id="setup-title">Send an article here.</h2>
+          <p class="eyebrow">One-time setup</p>
+          <h2 tabindex="-1" autofocus id="setup-title">Send articles to Hear</h2>
         </div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
-      </div>
-      <section class="apple-shortcut-setup" aria-labelledby="apple-shortcut-title">
-        <p class="setup-option-label" id="apple-shortcut-title">Share Sheet · iPhone &amp; iPad</p>
-        <p>Send any public article straight to Hear from Safari or any app that shares its link.</p>
-        <a
-          class="apple-shortcut-link"
-          href="https://www.icloud.com/shortcuts/c7bdc6f3b47c4c838c2bb808ff0731d7"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Add to Apple Shortcuts
-          <span aria-hidden="true">↗</span>
+      </header>
+      <section class="sheet-section" aria-labelledby="apple-shortcut-title">
+        <div class="section-head"><h3 id="apple-shortcut-title">iPhone &amp; iPad share sheet</h3></div>
+        <p class="section-lede">Send any public article straight to Hear from Safari or any app that shares links.</p>
+        <a class="button button-primary button-wide" href="https://www.icloud.com/shortcuts/c7bdc6f3b47c4c838c2bb808ff0731d7" target="_blank" rel="noreferrer">
+          Add to Apple Shortcuts <span aria-hidden="true">↗</span>
         </a>
-        <small>After adding it, open an article and choose Share → “send to hear!”</small>
+        <p class="field-hint">Then open an article and choose Share → “send to hear!”</p>
       </section>
-      <div class="setup-divider"><span>Safari bookmarklet · Mac</span></div>
-      <ol class="setup-steps">
-        <li><span>1</span><p>Show Safari’s Favorites Bar with <strong>⌘⇧B</strong>.</p></li>
-        <li><span>2</span><p>Drag the button below into the bar.</p></li>
-        <li><span>3</span><p>Click it from the article you want to hear.</p></li>
-      </ol>
-      <a class="bookmarklet" id="bookmarklet-link" href="#">Listen with Hear <span>↗</span></a>
-      <p class="setup-fineprint">The bookmarklet works without Apple Shortcuts. On iPhone or iPad, bookmark this page, edit the bookmark, then replace its address with the code copied below.</p>
-      <button class="copy-shortcut" id="copy-bookmarklet" type="button">Copy shortcut code</button>
+      <section class="sheet-section" aria-labelledby="bookmarklet-title">
+        <div class="section-head"><h3 id="bookmarklet-title">Safari bookmarklet on Mac</h3></div>
+        <ol class="setup-steps">
+          <li>Show Safari’s Favorites Bar with <kbd>⌘⇧B</kbd>.</li>
+          <li>Drag the button below into the bar.</li>
+          <li>Click it on the article you want to hear.</li>
+        </ol>
+        <a class="button button-accent button-wide bookmarklet" id="bookmarklet-link" href="#">Listen with Hear <span aria-hidden="true">↗</span></a>
+        <p class="field-hint">On iPhone or iPad without Shortcuts, bookmark this page, edit the bookmark, and replace its address with the code below.</p>
+        <button class="button button-quiet" id="copy-bookmarklet" type="button">Copy bookmarklet code</button>
+      </section>
     </dialog>
 
-    <dialog class="sheet recovery-sheet" id="recovery-sheet" aria-labelledby="recovery-title" aria-describedby="recovery-description">
-      <div class="sheet-head">
+    <dialog class="sheet" id="recovery-sheet" aria-labelledby="recovery-title" aria-describedby="recovery-description">
+      <header class="sheet-head">
         <div>
           <p class="eyebrow">Another public edition</p>
-          <h2 id="recovery-title">A readable copy<br />is available.</h2>
+          <h2 tabindex="-1" autofocus id="recovery-title">A readable copy is available</h2>
         </div>
         <button class="sheet-close" type="button" data-close-dialog aria-label="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
-      </div>
-      <p class="recovery-description" id="recovery-description">Choose the public repository you want Hear to open.</p>
+      </header>
+      <p class="sheet-lede" id="recovery-description">Choose the public repository you want Hear to open.</p>
       <div class="recovery-options" id="recovery-options"></div>
-      <p class="recovery-note">Hear shows the repository and keeps the original page attached for attribution.</p>
+      <p class="sheet-note">Hear shows the repository and keeps the original page attached for attribution.</p>
     </dialog>
 
     <div class="loading-view" id="loading-view" hidden aria-busy="true">
-      <div class="loading-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-      <p id="loading-title">Editing for your ears…</p>
-      <span id="loading-detail">Removing citations and references</span>
-      <div class="loading-progress" id="loading-progress" hidden><i></i></div>
-      <button class="loading-cancel" id="loading-cancel" type="button" hidden>Cancel preparation</button>
+      <div class="loading-card">
+        <div class="loading-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        <p id="loading-title">Editing for your ears…</p>
+        <span id="loading-detail">Removing citations and references</span>
+        <button class="text-link" id="loading-cancel" type="button" hidden>Cancel</button>
+      </div>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
