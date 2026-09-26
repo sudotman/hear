@@ -63,7 +63,6 @@ const elements = {
   sourceSwitcher: $("#source-switcher"),
   savedCount: $("#saved-count"),
   catalogTopics: $("#catalog-topics"),
-  catalogEyebrow: $("#catalog-eyebrow"),
   catalogTitle: $("#catalog-title"),
   catalogStatus: $("#catalog-status"),
   catalogProgress: $("#catalog-progress"),
@@ -565,7 +564,6 @@ function renderSavedLibrary() {
   elements.savedCount.textContent = String(entries.length);
   elements.catalogProgress.hidden = true;
   elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
-  elements.catalogEyebrow.textContent = "Saved on this device";
   elements.catalogTitle.textContent = "My listening library";
   elements.catalogStatus.textContent = entries.length
     ? `${entries.length} ${entries.length === 1 ? "work" : "works"} · progress saved locally`
@@ -735,7 +733,6 @@ async function loadCatalog({ append = false } = {}) {
     items = items.filter((item) => !existingIds.has(item.id || item.key));
     state.catalogItems = append ? [...state.catalogItems, ...items] : items;
     renderCatalogItems(items, { append });
-    elements.catalogEyebrow.textContent = query ? "Search results" : topic ? "Browse by subject" : "Open shelves";
     elements.catalogTitle.textContent = query ? `Books for “${query}”` : topic ? topic.label : "Books worth hearing";
     const sourceSummary = state.catalogSource === "all"
       ? "Standard Ebooks and Project Gutenberg"
@@ -795,7 +792,6 @@ function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
     elements.bookGrid.replaceChildren();
     elements.catalogProgress.hidden = true;
     elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
-    elements.catalogEyebrow.textContent = "From across the web";
     elements.catalogTitle.textContent = "Open an article to hear";
     elements.catalogStatus.textContent = "Paste a public article link, or enter a topic to search Wikipedia.";
     elements.loadMore.hidden = true;
@@ -1211,7 +1207,6 @@ async function searchWikipedia(parsed, { scroll = true } = {}) {
   state.catalogAbortController = controller;
   elements.catalogControls.hidden = true;
   elements.bookGrid.replaceChildren();
-  elements.catalogEyebrow.textContent = `${safeLanguage(parsed.lang).toUpperCase()} Wikipedia`;
   elements.catalogTitle.textContent = `Results for “${parsed.title.trim()}”`;
   elements.catalogStatus.textContent = "Searching Wikipedia…";
   elements.loadMore.hidden = true;
