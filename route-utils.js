@@ -11,6 +11,9 @@ export function routeForWork(work, pathname = "/") {
   } else if (work?.source === "gutenberg") {
     params.set("source", "gutenberg");
     params.set("book", String(work.key || "").replace(/^gutenberg:/, ""));
+  } else if (work?.source === "collection") {
+    params.set("source", "collection");
+    params.set("book", String(work.key || "").replace(/^collection:/, ""));
   }
   const query = params.toString();
   return query ? `${pathname}?${query}` : pathname;

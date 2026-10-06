@@ -9,6 +9,7 @@ const WORK_STORE = "works";
 const COVER_STORE = "covers";
 const DATABASE_VERSION = 2;
 const CACHE_VERSION = 7;
+const EPUB_OPS_NAMESPACE = "http://www.idpf.org/2007/ops";
 const decoder = new TextDecoder();
 
 function xmlDocument(text) {
@@ -312,9 +313,15 @@ function extractEpubChapter(files, item, title, chapterNumber, titles) {
   if (document.querySelector("parsererror")) document = new DOMParser().parseFromString(text, "text/html");
   document.querySelectorAll([
     "script", "style", "nav", "aside", "figure", "svg", "math", "audio", "video",
-    "[role='doc-footnote']", "[role='doc-endnotes']", "[epub\\:type~='footnote']", "[epub\\:type~='endnote']",
-    "[epub\\:type~='noteref']",
+    "[role='doc-noteref']", "[role='doc-footnote']", "[role='doc-endnote']", "[role='doc-endnotes']", "[role='doc-backlink']",
+    "[epub\\:type~='footnote']", "[epub\\:type~='endnote']", "[epub\\:type~='noteref']",
   ].join(",")).forEach((node) => node.remove());
+  // In XHTML parsed as XML, epub:type is a namespaced attribute that the CSS
+  // selectors above cannot see, so note references ("Verus1") would be read aloud.
+  for (const node of [...document.getElementsByTagName("*")]) {
+    const type = node.getAttributeNS(EPUB_OPS_NAMESPACE, "type") || "";
+    if (/\b(?:noteref|footnotes?|endnotes?|rearnotes?)\b/.test(type)) node.remove();
+  }
 
   const body = document.querySelector("body") || document.documentElement;
   const candidates = [...body.querySelectorAll("h1, h2, h3, p, li, blockquote, tr")];

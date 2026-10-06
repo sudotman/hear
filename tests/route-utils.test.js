@@ -20,6 +20,8 @@ test("book routes and history state remain stable", () => {
     .toBe("/?source=standard&book=jane-austen%2Fpride-and-prejudice");
   expect(routeForWork({ source: "gutenberg", key: "gutenberg:1342" }, "/"))
     .toBe("/?source=gutenberg&book=1342");
+  expect(routeForWork({ source: "collection", key: "collection:self-reliance" }, "/"))
+    .toBe("/?source=collection&book=self-reliance");
   expect(routeStateForWork({ key: "gutenberg:1342" })).toEqual({ view: "reader", work: "gutenberg:1342" });
   expect(libraryRouteState()).toEqual({ view: "library" });
 });

@@ -105,7 +105,7 @@ function standardEpubFixture() {
       <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
         <body><section epub:type="chapter">
           <h2>I</h2>
-          <p>The opening paragraph contains enough words to make this a readable fixture chapter for the parser.</p>
+          <p>The opening paragraph<a href="endnotes.xhtml#note-1" id="noteref-1" role="doc-noteref" epub:type="noteref">1</a> contains enough words to make this a readable fixture chapter for the parser.</p>
           <blockquote epub:type="z3998:letter">
             <p>I would have thanked you before, my dear aunt, and this letter must appear exactly once.</p>
             <footer><p>Yours sincerely, etc.</p></footer>
@@ -132,6 +132,63 @@ async function mockStandardBook(page) {
   }));
 }
 
+const COLLECTION_ORIGIN = "https://satyam.lol";
+
+// The default collection (github.com/sudotman/shelf), served with CORS like
+// GitHub Pages so it loads under Hear's cross-origin isolation.
+async function mockCollection(page) {
+  const cors = { "Access-Control-Allow-Origin": "*" };
+  const coverBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const book = {
+    id: "pride-and-prejudice",
+    title: "Pride and Prejudice",
+    author: "Jane Austen",
+    authors: ["Jane Austen"],
+    description: "A comedy of manners.",
+    language: "en",
+    format: "epub",
+    kind: "book",
+    file: "files/pride-and-prejudice.epub",
+    cover: "covers/pride.jpg",
+    size: 4096,
+    sha256: "f00d",
+    shelfLabel: "Novels",
+    tags: ["classics"],
+    subjects: [],
+    listenable: true,
+  };
+  await page.route(`${COLLECTION_ORIGIN}/shelf/catalog.json`, (route) => route.fulfill({
+    headers: cors,
+    contentType: "application/json",
+    body: JSON.stringify({
+      version: 1,
+      title: "Satyam’s collection",
+      owner: "Satyam",
+      description: "Books worth keeping.",
+      url: `${COLLECTION_ORIGIN}/shelf/`,
+      books: [
+        book,
+        // Short works (usually PDFs) are articles to the reader; same file, curated title.
+        { ...book, id: "a-short-essay", title: "A Short Essay", author: "Ralph Waldo Emerson", kind: "article", sha256: "beef" },
+        { ...book, id: "scanned-notes", format: "pdf", file: "files/scanned-notes.pdf", listenable: false },
+      ],
+    }),
+  }));
+  await page.route(`${COLLECTION_ORIGIN}/shelf/files/pride-and-prejudice.epub`, (route) => route.fulfill({
+    headers: cors,
+    contentType: "application/epub+zip",
+    body: standardEpubFixture(),
+  }));
+  await page.route(`${COLLECTION_ORIGIN}/shelf/covers/pride.jpg`, (route) => route.fulfill({
+    headers: cors,
+    contentType: "image/png",
+    body: coverBytes,
+  }));
+}
+
 test.beforeEach(async ({ page }) => {
   const errors = [];
   browserErrors.set(page, errors);
@@ -140,6 +197,7 @@ test.beforeEach(async ({ page }) => {
     if (message.type() === "error") errors.push(message.text());
   });
   await mockWikipedia(page);
+  await mockCollection(page);
 });
 
 test.afterEach(async ({ page }) => {
@@ -259,6 +317,64 @@ test("does not repeat paragraphs nested inside EPUB blockquotes", async ({ page 
   await expect(page.locator("#article-copy > p")).toHaveCount(4);
   await expect(page.locator("#article-copy > p").filter({ hasText: "I would have thanked you before" })).toHaveCount(1);
   await expect(page.locator("#article-copy")).toContainText("Yours sincerely, etc.");
+  await expect(page.locator("#article-copy > p").first()).toHaveText(/^The opening paragraph contains enough words/);
+});
+
+test("shows the personal collection and opens its books from a shareable link", async ({ page }) => {
+  const shelfRequests = [];
+  page.on("request", (request) => {
+    if (request.url().startsWith(COLLECTION_ORIGIN)) shelfRequests.push(new URL(request.url()).pathname);
+  });
+  await page.route("https://standardebooks.org/ebooks**", (route) => route.fulfill({
+    contentType: "text/html",
+    body: '<div class="ebooks-list"></div>',
+  }));
+  await page.route("https://gutendex.com/books/?**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ results: [] }),
+  }));
+
+  await page.goto("/");
+  const shelf = page.locator("#collection-section");
+  await expect(shelf.getByRole("heading", { name: "Satyam’s collection", level: 2 })).toBeVisible();
+  await expect(shelf.locator("#collection-eyebrow")).toHaveText("Kept by Satyam");
+  const card = shelf.getByRole("button", { name: "Open Pride and Prejudice by Jane Austen" });
+  await expect(card.locator("img")).toBeVisible();
+  await expect(page.locator("#discovery-hint")).toContainText("Satyam’s collection");
+
+  await page.locator("#collection-browse").click();
+  await expect(page.locator("#collection-source")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#catalog-title")).toHaveText("Satyam’s collection");
+  await expect(page.locator("#catalog-status")).toContainText("2 works from Satyam’s collection");
+  await expect(page.locator("#catalog-status")).toContainText("1 more can be read on the shelf");
+
+  // An article from the collection opens from the collection, not Wikipedia.
+  const wikipediaRequests = [];
+  page.on("request", (request) => {
+    if (/wikipedia\.org/.test(request.url())) wikipediaRequests.push(request.url());
+  });
+  await page.locator("#book-grid").getByRole("button", { name: "Open A Short Essay by Ralph Waldo Emerson" }).click();
+  await expect(page.getByRole("heading", { name: "A Short Essay", level: 1 })).toBeVisible();
+  await expect(page.locator("#article-kicker")).toHaveText("From Satyam’s collection");
+  expect(wikipediaRequests).toEqual([]);
+  await page.locator("#library-button").click();
+
+  await card.click();
+  await expect(page.getByRole("heading", { name: "Pride and Prejudice", level: 1 })).toBeVisible();
+  await expect(page).toHaveURL(/\?source=collection&book=pride-and-prejudice$/);
+  await expect(page.locator("#article-kicker")).toHaveText("Satyam’s collection · listening edition");
+  await expect(page.locator("#source-link")).toHaveAttribute("href", `${COLLECTION_ORIGIN}/shelf/#pride-and-prejudice`);
+  await expect(page.locator("#article-image")).toHaveAttribute("src", `${COLLECTION_ORIGIN}/shelf/covers/pride.jpg`);
+  await expect(page.locator("#article-copy")).not.toContainText("paragraph1");
+  // Playwright's WebKit on Windows and Linux ships without Media Session.
+  if (await page.evaluate(() => "mediaSession" in navigator)) {
+    await expect.poll(() => page.evaluate(() => navigator.mediaSession.metadata?.title)).toBe("Pride and Prejudice");
+  }
+
+  // One download per book; reopening from the link uses the prepared copy.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Pride and Prejudice", level: 1 })).toBeVisible();
+  expect(shelfRequests.filter((path) => path.endsWith(".epub"))).toHaveLength(2);
 });
 
 test("makes books and articles obvious from the homepage and displays catalog covers", async ({ page }) => {

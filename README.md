@@ -7,6 +7,7 @@ hear is a private, browser-based listening library for web articles, public-doma
 ## what it supports
 
 - browse standard ebooks and project gutenberg catalogs
+- listen to **satyam's collection**, my own epubs and pdfs, published from [sudotman/shelf](https://github.com/sudotman/shelf)
 - open wikipedia articles without citation markers, references, tables, or navigation furniture in the narration
 - paste a public article URL from across the web and turn its Reader View-style text into listening copy
 - recover missing public pages through an attributed [Internet Archive](https://archive.org/) snapshot, and find authorized open research copies from [arXiv](https://arxiv.org/) or [Europe PMC](https://europepmc.org/)
@@ -17,6 +18,10 @@ hear is a private, browser-based listening library for web articles, public-doma
 - use media session controls and a real `<audio>` element for natural-voice playback on iphone control center and the lock screen
 
 catalog metadata comes from the public catalogs. standard ebooks uses its compatible epub editions. project gutenberg text is loaded from the corresponding [gitenberg](https://www.gitenberg.org/) mirror and remains linked to the original [gutenberg](https://www.gutenberg.org/) edition.
+
+## satyam's collection
+
+the home page shows a shelf read from `https://satyam.lol/shelf/catalog.json`, and its books also turn up in book searches. opening one downloads the epub or pdf into the browser and prepares it on the device, exactly like an import. any site serving the same `catalog.json` with cors can be hooked in instead: build with `VITE_COLLECTION_URL=https://example.com/catalog.json`, or `VITE_COLLECTION_URL=off` to remove the section. to try a local shelf, run `npm run dev` in the shelf repo and `VITE_COLLECTION_URL=http://localhost:4321/catalog.json npm run dev` here.
 
 ## voices
 
@@ -56,6 +61,7 @@ wikipedia (url):   ?url=https://en.wikipedia.org/wiki/Art
 web article:       ?url=https://example.com/an-article
 standard ebooks:   ?source=standard&book=jane-austen/pride-and-prejudice
 project gutenberg: ?source=gutenberg&book=1342
+collection:        ?source=collection&book=meditations
 ```
 
 imported epubs and pdfs do not create shareable urls because their contents stay in that browser.

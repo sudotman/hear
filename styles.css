@@ -862,6 +862,82 @@ body.library-open .header-search {
   fill: var(--ink);
 }
 
+.collection-section {
+  width: min(100%, var(--content));
+  margin: 0 auto;
+  padding: clamp(48px, 7vw, 96px) var(--gutter) 0;
+}
+
+.collection-heading {
+  display: flex;
+  gap: 16px 32px;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.collection-heading h2 {
+  margin-top: 12px;
+  font-family: var(--serif);
+  font-size: clamp(36px, 4.4vw, 60px);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.collection-deck {
+  max-width: 52ch;
+  margin-top: 14px;
+  color: var(--ink-2);
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.collection-actions {
+  display: flex;
+  gap: 8px 20px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.collection-actions .count {
+  margin-left: -2px;
+}
+
+/* A single scrolling shelf; cards keep the catalog's proportions. */
+.collection-row {
+  display: grid;
+  margin: 28px calc(var(--gutter) * -1) 0;
+  padding: 4px var(--gutter) 16px;
+  grid-auto-flow: column;
+  grid-auto-columns: clamp(140px, 15vw, 210px);
+  gap: clamp(18px, 2.4vw, 36px);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: var(--gutter);
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.collection-row::-webkit-scrollbar {
+  display: none;
+}
+
+.collection-row > .book-item {
+  scroll-snap-align: start;
+}
+
+/* Topics browse the public catalogs, so they step aside for the collection. */
+.catalog-controls:has(#collection-source[aria-pressed="true"]) #catalog-topics {
+  visibility: hidden;
+}
+
+.collection-section:not([hidden]) + .catalog-section {
+  margin-top: clamp(24px, 4vw, 48px);
+  border-top: 1px solid var(--line);
+}
+
 .catalog-section {
   width: min(100%, var(--content));
   margin: 0 auto;

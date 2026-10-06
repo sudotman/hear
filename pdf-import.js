@@ -217,9 +217,34 @@ function metadataValue(metadata, info, key, fallback = "") {
   return cleanPdfText(metadata?.get?.(metadataKeys[key]) || info?.[key] || fallback);
 }
 
-export async function parsePdfFile(file, { signal, onStatus } = {}) {
+export async function parsePdfFile(file, options = {}) {
+  if (options.signal?.aborted) throw options.signal.reason || new DOMException("Aborted", "AbortError");
+  return parsePdfBytes(new Uint8Array(await file.arrayBuffer()), {
+    ...options,
+    key: `local-pdf:${file.name}:${file.size}:${file.lastModified}`,
+    fallbackTitle: file.name.replace(/\.pdf$/i, "").replaceAll(/[_-]+/g, " ").trim(),
+  });
+}
+
+// Catalog sources (such as a personal collection) pass curated metadata, which
+// takes precedence over the PDF's often-unreliable document properties.
+export async function parsePdfBytes(bytes, {
+  signal,
+  onStatus,
+  key,
+  fallbackTitle = "",
+  title: curatedTitle = "",
+  author: curatedAuthor = "",
+  description: curatedDescription = "",
+  language: curatedLanguage = "",
+  image = "",
+  kind = "article",
+  source = "local",
+  sourceLabel = "My PDF",
+  sourceUrl = "",
+  catalogItem = null,
+} = {}) {
   if (signal?.aborted) throw signal.reason || new DOMException("Aborted", "AbortError");
-  const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = getDocument({ data: bytes, isEvalSupported: false, useWorkerFetch: false });
   const abort = () => loadingTask.destroy();
   signal?.addEventListener("abort", abort, { once: true });
@@ -230,11 +255,13 @@ export async function parsePdfFile(file, { signal, onStatus } = {}) {
     pdf = await loadingTask.promise;
     if (pdf.numPages > 500) throw new Error("That PDF has over 500 pages. Split it into a smaller document first.");
     const metadataResult = await pdf.getMetadata().catch(() => ({ info: {}, metadata: null }));
-    const titleFallback = file.name.replace(/\.pdf$/i, "").replaceAll(/[_-]+/g, " ").trim() || "Imported PDF";
-    const metadataTitle = metadataValue(metadataResult.metadata, metadataResult.info, "Title");
-    const author = metadataValue(metadataResult.metadata, metadataResult.info, "Author");
+    const titleFallback = fallbackTitle || "Imported PDF";
+    const metadataTitle = cleanPdfText(curatedTitle) || metadataValue(metadataResult.metadata, metadataResult.info, "Title");
+    const author = cleanPdfText(curatedAuthor) || metadataValue(metadataResult.metadata, metadataResult.info, "Author");
     const subject = metadataValue(metadataResult.metadata, metadataResult.info, "Subject");
-    const language = metadataValue(metadataResult.metadata, metadataResult.info, "Language", "en") || "en";
+    const language = cleanPdfText(curatedLanguage)
+      || metadataValue(metadataResult.metadata, metadataResult.info, "Language", "en")
+      || "en";
     const blocks = [];
     const sectionState = { name: "Opening", id: "introduction", skipRest: false };
 
@@ -254,7 +281,12 @@ export async function parsePdfFile(file, { signal, onStatus } = {}) {
       }
     }
 
-    const inferredTitleBlock = !metadataTitle && blocks[0]?.type === "h2" ? blocks[0] : null;
+    // A leading heading is the title: either there is no other title, or it
+    // repeats the known one (narration already opens with the title).
+    const inferredTitleBlock = blocks[0]?.type === "h2"
+      && (!metadataTitle || normalizedHeading(blocks[0].text) === normalizedHeading(metadataTitle))
+      ? blocks[0]
+      : null;
     const title = metadataTitle || inferredTitleBlock?.text || titleFallback;
     if (inferredTitleBlock) {
       blocks.shift();
@@ -270,17 +302,19 @@ export async function parsePdfFile(file, { signal, onStatus } = {}) {
       throw new Error("This PDF does not contain enough selectable text. It may be a scanned document.");
     }
     return {
-      key: `local-pdf:${file.name}:${file.size}:${file.lastModified}`,
-      kind: "article",
-      source: "local",
-      sourceLabel: "My PDF",
-      sourceUrl: "",
+      key,
+      kind,
+      format: "pdf",
+      source,
+      sourceLabel,
+      sourceUrl,
       title,
       author: author || "Imported document",
-      description: cleanPdfText(`${author ? `${author}. ` : ""}${subject || "A PDF prepared privately on this device."}`),
-      image: "",
+      description: cleanPdfText(curatedDescription)
+        || cleanPdfText(`${author ? `${author}. ` : ""}${subject || "A PDF prepared privately on this device."}`),
+      image,
       lang: language,
-      catalogItem: null,
+      catalogItem,
       blocks,
     };
   } catch (error) {

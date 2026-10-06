@@ -1,9 +1,12 @@
 import { gzipSync } from "node:zlib";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const assetsDir = new URL("../dist/assets/", import.meta.url);
-const assets = readdirSync(assetsDir).map((name) => ({ name, path: join(assetsDir.pathname, name) }));
+// fileURLToPath, not URL.pathname: pathname keeps %20 escapes and a leading
+// slash before Windows drive letters.
+const assetsDir = fileURLToPath(new URL("../dist/assets/", import.meta.url));
+const assets = readdirSync(assetsDir).map((name) => ({ name, path: join(assetsDir, name) }));
 const mainScript = assets.find((asset) => /^main-.*\.js$/.test(asset.name));
 if (!mainScript) throw new Error("Bundle check could not find the main application script.");
 const mainGzipBytes = gzipSync(readFileSync(mainScript.path)).byteLength;

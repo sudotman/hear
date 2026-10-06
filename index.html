@@ -76,7 +76,7 @@
               </form>
 
               <div class="discovery-note">
-                <p id="discovery-hint">Searches Standard Ebooks and Project Gutenberg.</p>
+                <p id="discovery-hint" data-books="Searches Standard Ebooks and Project Gutenberg.">Searches Standard Ebooks and Project Gutenberg.</p>
                 <button type="button" class="text-link" id="setup-button" hidden>Set up the share shortcut</button>
               </div>
             </div>
@@ -87,6 +87,21 @@
             </aside>
           </div>
         </div>
+
+        <section class="collection-section" id="collection-section" aria-labelledby="collection-title" hidden>
+          <header class="collection-heading">
+            <div>
+              <p class="eyebrow" id="collection-eyebrow">A personal library</p>
+              <h2 id="collection-title">Satyam’s collection</h2>
+              <p class="collection-deck" id="collection-deck" hidden></p>
+            </div>
+            <div class="collection-actions">
+              <button type="button" class="button button-quiet" id="collection-browse">Browse all <span class="count" id="collection-count">0</span></button>
+              <a class="text-link" id="collection-site-link" href="https://satyam.lol/shelf/" target="_blank" rel="noreferrer">Open the shelf ↗</a>
+            </div>
+          </header>
+          <div class="collection-row" id="collection-row" role="list" aria-labelledby="collection-title"></div>
+        </section>
 
         <section class="catalog-section" aria-labelledby="catalog-title">
           <header class="catalog-heading">
@@ -104,6 +119,7 @@
             </div>
             <div class="segmented" id="source-switcher" role="group" aria-label="Book source">
               <button type="button" data-source="all" aria-pressed="true">All</button>
+              <button type="button" data-source="collection" aria-pressed="false" id="collection-source" hidden><span class="label-long" id="collection-source-label">Satyam’s collection</span><span class="label-short">Satyam’s</span></button>
               <button type="button" data-source="standard" aria-pressed="false" aria-label="Standard Ebooks"><span class="label-long">Standard Ebooks</span><span class="label-short">Standard</span></button>
               <button type="button" data-source="gutenberg" aria-pressed="false">Gutenberg</button>
               <button type="button" data-source="saved" aria-pressed="false" aria-label="My library"><span class="label-long">My library</span><span class="label-short">Saved</span> <span class="count" id="saved-count">0</span></button>
@@ -122,7 +138,7 @@
 
         <footer class="library-footer">
           <p>Voice generation, EPUB and PDF reading, your library, and your progress all stay on this device.</p>
-          <p>Every article stays attributed and linked to its publisher. Books remain linked to <a href="https://standardebooks.org/" target="_blank" rel="noreferrer">Standard Ebooks</a> and <a href="https://www.gutenberg.org/" target="_blank" rel="noreferrer">Project Gutenberg</a>.</p>
+          <p>Every article stays attributed and linked to its publisher. Books remain linked to <a href="https://standardebooks.org/" target="_blank" rel="noreferrer">Standard Ebooks</a>, <a href="https://www.gutenberg.org/" target="_blank" rel="noreferrer">Project Gutenberg</a>, and <a href="https://satyam.lol/shelf/" target="_blank" rel="noreferrer" id="footer-collection-link">Satyam’s collection</a>.</p>
         </footer>
       </section>
 

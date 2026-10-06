@@ -23,6 +23,7 @@ import {
   formatMegabytes,
   getModelDownloadDetails,
 } from "./app-config.js";
+import { collectionCatalogUrl, isCollectionAssetUrl } from "./collection-config.js";
 import { parseEpubInWorker } from "./epub-client.js";
 import { fetchWithTimeout, isAbortError } from "./fetch-utils.js";
 import { libraryRouteState, routeForWork, routeStateForWork } from "./route-utils.js";
@@ -43,6 +44,9 @@ import {
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+// The collection's catalog, loader, and shelf rendering stay out of the
+// initial bundle.
+const loadCollectionModule = () => import("./collection.js");
 
 const elements = {
   siteHeader: $(".site-header"),
@@ -72,6 +76,7 @@ const elements = {
   loadMore: $("#load-more"),
   continueListening: $("#continue-listening"),
   continueList: $("#continue-list"),
+  collectionBrowse: $("#collection-browse"),
   headerSearch: $("#header-search"),
   headerQuery: $("#header-query"),
   articleTitle: $("#article-title"),
@@ -130,7 +135,6 @@ const elements = {
   engineDescription: $("#engine-description"),
   kittenVoiceSelect: $("#kitten-voice-select"),
   kittenVoiceRow: $("#kitten-voice-row"),
-  kittenVoiceTraits: $("#kitten-voice-traits"),
   activeModelLabel: $("#active-model-label"),
   clearAudioCache: $("#clear-audio-cache"),
   clearAllData: $("#clear-all-data"),
@@ -183,6 +187,10 @@ const CATALOG_TOPICS = {
   philosophy: { label: "Ideas", standard: "philosophy", gutenberg: "philosophy" },
   poetry: { label: "Poetry", standard: "poetry", gutenberg: "poetry" },
 };
+// When one title turns up in several sources, keep the best edition, and nudge
+// the owner's own collection up search results.
+const EDITION_PRIORITY = { collection: 2, standard: 1 };
+const SEARCH_SOURCE_BONUS = { collection: 40, standard: 12 };
 const TTS_APP_VERSION = "2026.08.06";
 const NATURAL_VOICES = {
   af_heart: { name: "Heart", note: "Warm and balanced — the strongest all-round choice." },
@@ -436,7 +444,8 @@ function displayImageSource(item) {
     // Wikimedia serves images with CORS enabled, while Wikimedia rejects the
     // Cloudflare image proxy. Loading it directly also remains valid under COEP.
     // The REST summary API now returns thumbnails on thumb.wikimedia.org.
-    if (url.hostname === "upload.wikimedia.org" || url.hostname === "thumb.wikimedia.org") return url.href;
+    // The collection is served with CORS too (GitHub Pages).
+    if (url.hostname === "upload.wikimedia.org" || url.hostname === "thumb.wikimedia.org" || isCollectionAssetUrl(url.href)) return url.href;
     const proxyPath = coverProxyPath(url.href);
     if (proxyPath) return new URL(proxyPath, location.origin).href;
     return crossOriginIsolated ? "" : url.href;
@@ -477,15 +486,17 @@ function appendBookCoverImage(cover, item, source = displayImageSource(item)) {
 }
 
 function renderBookCard(item, { removable = false } = {}) {
+  // Collection PDFs can be articles to the reader but still have an author.
+  const isArticle = item.kind === "article" && item.source !== "collection";
   const wrapper = document.createElement("article");
   wrapper.className = "book-item";
-  wrapper.classList.toggle("article-result", item.kind === "article");
+  wrapper.classList.toggle("article-result", isArticle);
   const button = document.createElement("button");
   button.className = "book-card";
   button.type = "button";
   button.setAttribute(
     "aria-label",
-    item.kind === "article" ? `Open ${item.title} from ${item.sourceLabel || "its publisher"}` : `Open ${item.title} by ${item.author}`,
+    isArticle ? `Open ${item.title} from ${item.sourceLabel || "its publisher"}` : `Open ${item.title} by ${item.author}`,
   );
 
   const cover = document.createElement("span");
@@ -511,7 +522,7 @@ function renderBookCard(item, { removable = false } = {}) {
   const title = document.createElement("h3");
   title.textContent = item.title;
   const author = document.createElement("small");
-  author.textContent = item.kind === "article"
+  author.textContent = isArticle
     ? item.description || `${item.sourceLabel || "Web"} article`
     : item.author || "Unknown author";
   button.append(cover, title, author);
@@ -600,7 +611,7 @@ function catalogMatchScore(item, query) {
   const categories = normalizeCatalogText(item.categories?.join(" "));
   const description = normalizeCatalogText(item.description);
   const tokens = needle.split(" ").filter(Boolean);
-  let score = item.source === "standard" ? 12 : 0;
+  let score = 0;
   if (titleAndAuthor === needle) score += 1800;
   else if (titleAndAuthor.startsWith(needle)) score += 1100;
   if (title === needle) score += 1200;
@@ -624,10 +635,10 @@ function catalogIdentity(item) {
   return `${normalizeCatalogText(item.title)}|${normalizeCatalogText(item.author)}`;
 }
 
-function prepareCatalogItems(standard, gutenberg, query, limit = 30) {
+function prepareCatalogItems(standard, gutenberg, query, limit = 30, collection = []) {
   const candidates = query
-    ? [...standard, ...gutenberg]
-        .map((item, index) => ({ item, index, score: catalogMatchScore(item, query) }))
+    ? [...collection, ...standard, ...gutenberg]
+        .map((item, index) => ({ item, index, score: catalogMatchScore(item, query) + (SEARCH_SOURCE_BONUS[item.source] || 0) }))
         .sort((left, right) => right.score - left.score || left.index - right.index)
         .map(({ item }) => item)
     : interleave(standard, gutenberg, limit * 2);
@@ -635,10 +646,11 @@ function prepareCatalogItems(standard, gutenberg, query, limit = 30) {
   candidates.forEach((item) => {
     const identity = catalogIdentity(item);
     const current = editions.get(identity);
-    if (!current || (item.source === "standard" && current.source !== "standard")) editions.set(identity, item);
+    if (!current || (EDITION_PRIORITY[item.source] || 0) > (EDITION_PRIORITY[current.source] || 0)) editions.set(identity, item);
   });
   return [...editions.values()].slice(0, limit);
 }
+
 
 function setCatalogProgress(completed, total, label) {
   const safeTotal = Math.max(1, total);
@@ -648,10 +660,36 @@ function setCatalogProgress(completed, total, label) {
   elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", String(completed < safeTotal));
 }
 
+async function renderCollectionCatalog() {
+  state.catalogAbortController?.abort();
+  state.catalogAbortController = null;
+  const requestId = ++state.catalogRequestId;
+  const query = state.catalogQuery.trim();
+  elements.catalogProgress.hidden = true;
+  elements.catalogProgress.closest(".catalog-section")?.setAttribute("aria-busy", "false");
+  elements.loadMore.hidden = true;
+  elements.bookGrid.replaceChildren();
+  elements.catalogStatus.textContent = "Opening the collection…";
+  try {
+    const view = await (await loadCollectionModule()).collectionView(query, catalogMatchScore);
+    if (requestId !== state.catalogRequestId) return;
+    state.catalogItems = view.items;
+    renderCatalogItems(view.items);
+    elements.catalogTitle.textContent = view.title;
+    elements.catalogStatus.textContent = view.status;
+  } catch (error) {
+    if (requestId === state.catalogRequestId) elements.catalogStatus.textContent = error.message;
+  }
+}
+
 async function loadCatalog({ append = false } = {}) {
   if (state.catalogSource === "saved") {
     state.catalogAbortController?.abort();
     renderSavedLibrary();
+    return;
+  }
+  if (state.catalogSource === "collection") {
+    renderCollectionCatalog();
     return;
   }
   state.catalogAbortController?.abort();
@@ -670,7 +708,7 @@ async function loadCatalog({ append = false } = {}) {
   const totalUnits = standardUnits + gutenbergUnits;
   let completedUnits = 0;
   let reportedGutenbergUnits = 0;
-  const results = { standard: [], gutenberg: [] };
+  const results = { standard: [], gutenberg: [], collection: [] };
   const failures = [];
   const progressAction = searching ? `Searching for “${query}”` : topic ? `Browsing ${topic.label}` : "Browsing popular books";
   const updateProgress = (units, label) => {
@@ -680,7 +718,7 @@ async function loadCatalog({ append = false } = {}) {
   };
   const previewResults = () => {
     if (append || requestId !== state.catalogRequestId) return;
-    const preview = prepareCatalogItems(results.standard, results.gutenberg, query);
+    const preview = prepareCatalogItems(results.standard, results.gutenberg, query, 30, results.collection);
     if (preview.length) renderCatalogItems(preview);
   };
   elements.catalogStatus.textContent = `${progressAction}…`;
@@ -689,6 +727,14 @@ async function loadCatalog({ append = false } = {}) {
 
   try {
     const tasks = [];
+    // The collection is one small cached file, so it is searched alongside the
+    // public catalogs without its own progress step; failures are ignored.
+    if (searching && !append && state.catalogSource === "all" && collectionCatalogUrl()) {
+      tasks.push(loadCollectionModule().then(async (collectionModule) => {
+        results.collection = await collectionModule.searchCollection(query, catalogMatchScore);
+        previewResults();
+      }).catch(() => {}));
+    }
     if (standardUnits) {
       tasks.push(fetchStandardCatalog({
         query,
@@ -727,15 +773,16 @@ async function loadCatalog({ append = false } = {}) {
     }
     await Promise.all(tasks);
     if (requestId !== state.catalogRequestId) return;
-    if (failures.length === (standardUnits ? 1 : 0) + (gutenbergUnits ? 1 : 0)) throw failures[0].error;
-    let items = prepareCatalogItems(results.standard, results.gutenberg, query);
+    if (failures.length === (standardUnits ? 1 : 0) + (gutenbergUnits ? 1 : 0) && !results.collection.length) throw failures[0].error;
+    let items = prepareCatalogItems(results.standard, results.gutenberg, query, 30, results.collection);
     const existingIds = new Set(append ? state.catalogItems.map((item) => item.id || item.key) : []);
     items = items.filter((item) => !existingIds.has(item.id || item.key));
     state.catalogItems = append ? [...state.catalogItems, ...items] : items;
     renderCatalogItems(items, { append });
     elements.catalogTitle.textContent = query ? `Books for “${query}”` : topic ? topic.label : "Books worth hearing";
+    const collectionLabel = results.collection[0]?.sourceLabel;
     const sourceSummary = state.catalogSource === "all"
-      ? "Standard Ebooks and Project Gutenberg"
+      ? `${collectionLabel ? `${collectionLabel}, ` : ""}Standard Ebooks and Project Gutenberg`
       : state.catalogSource === "standard" ? "Standard Ebooks" : "Project Gutenberg";
     const failureNote = failures.length ? ` · ${failures.map((failure) => failure.source).join(" and ")} didn’t respond` : "";
     elements.catalogStatus.textContent = state.catalogItems.length
@@ -782,7 +829,7 @@ function setDiscoveryMode(mode, { focus = true, refresh = true } = {}) {
   elements.catalogSubmitLabel.textContent = isArticles ? "Open" : "Search";
   elements.discoveryHint.textContent = isArticles
     ? "Paste a link to a public article or paper, or search Wikipedia."
-    : "Searches Standard Ebooks and Project Gutenberg.";
+    : elements.discoveryHint.dataset.books;
   elements.setupButton.hidden = !isArticles;
   elements.catalogControls.hidden = isArticles;
   if (changed && isArticles) {
@@ -869,6 +916,24 @@ function updateContinueListening() {
   });
 }
 
+// The owner's collection as a shelf on the library page. It stays hidden when
+// no collection is configured or its catalog cannot be reached.
+async function renderCollectionShelf() {
+  if (!collectionCatalogUrl()) return;
+  try {
+    await (await loadCollectionModule()).showCollectionShelf(renderBookCard);
+  } catch (error) {
+    console.info("[Hear collection] unavailable", error.message);
+  }
+}
+
+// A collection book (the only items with a file hash) whose file changed on
+// the shelf is downloaded again.
+function isCurrentCachedWork(cached, item) {
+  const stored = cached?.catalogItem?.hash;
+  return Boolean(cached) && !(item?.hash && stored && item.hash !== stored);
+}
+
 function showArticleImageFallback() {
   elements.imageWrap.hidden = true;
 }
@@ -895,6 +960,7 @@ function showLibraryView({ scrollTop = true } = {}) {
   document.title = "Hear — the written world, spoken";
   if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
   updateContinueListening();
+  renderCollectionShelf();
   if (state.discoveryMode === "books" && !state.catalogItems.length && !state.catalogAbortController) loadCatalog();
 }
 
@@ -943,11 +1009,11 @@ function finishContentTask(controller, requestId) {
 async function openLibraryItem(item, options = {}) {
   const key = item.key || item.id;
   const cached = await getCachedWork(key).catch(() => null);
-  if (cached) {
+  if (isCurrentCachedWork(cached, item)) {
     activateWork(cached, options);
     return;
   }
-  if (item.kind === "article") {
+  if (item.kind === "article" && item.source !== "collection") {
     loadArticle(
       item.source === "web" && item.sourceUrl ? item.sourceUrl : `${item.lang || "en"}:${item.title}`,
       {
@@ -968,24 +1034,24 @@ async function openLibraryItem(item, options = {}) {
 async function loadCatalogItem(item, { historyMode = "push" } = {}) {
   stopSpeech("idle");
   const { controller, requestId } = beginContentTask(`Opening ${item.title}…`, `Connecting to ${item.sourceLabel}`);
+  const reportStatus = (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; };
   try {
-    const cached = await getCachedWork(item.id).catch(() => null);
+    const stored = await getCachedWork(item.id).catch(() => null);
+    const cached = isCurrentCachedWork(stored, item) ? stored : null;
     let resolvedItem = item;
     if (!cached && item.source === "standard" && !item.downloadUrl) {
       elements.loadingDetail.textContent = "Opening the Standard Ebooks edition";
       resolvedItem = await fetchStandardItemFromSlug(item.id.replace(/^standard:/, ""), { signal: controller.signal });
     }
-    const work = cached || (resolvedItem.source === "standard"
-      ? await loadStandardWork(
-        resolvedItem,
-        (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
-        { signal: controller.signal, parse: parseEpubInWorker },
-      )
-      : await loadGutenbergWork(
-        resolvedItem,
-        (message) => { if (requestId === state.contentRequestId) elements.loadingDetail.textContent = message; },
-        { signal: controller.signal },
-      ));
+    let work = cached;
+    if (!work && resolvedItem.source === "collection") {
+      const { loadCollectionWork } = await loadCollectionModule();
+      work = await loadCollectionWork(resolvedItem, reportStatus, { signal: controller.signal });
+    } else if (!work && resolvedItem.source === "standard") {
+      work = await loadStandardWork(resolvedItem, reportStatus, { signal: controller.signal, parse: parseEpubInWorker });
+    } else if (!work) {
+      work = await loadGutenbergWork(resolvedItem, reportStatus, { signal: controller.signal });
+    }
     if (controller.signal.aborted || requestId !== state.contentRequestId) return;
     if (!cached) await cacheWork(work).catch(() => {});
     activateWork(work, { historyMode });
@@ -1658,20 +1724,22 @@ function renderArticle(article) {
         : `From ${article.sourceLabel}${article.provenanceLabel ? ` · via ${article.provenanceLabel}` : ""}`;
   elements.sourceLink.hidden = !article.sourceUrl;
   elements.sourceLink.href = article.sourceUrl || "#";
-  elements.sourceLink.textContent = article.kind === "book"
-    ? `Edition at ${article.sourceLabel} ↗`
-    : article.provenanceLabel ? `Copy at ${article.provenanceLabel} ↗` : "Original article ↗";
+  elements.sourceLink.textContent = article.source === "collection"
+    ? `Open in ${article.sourceLabel} ↗`
+    : article.kind === "book"
+      ? `Edition at ${article.sourceLabel} ↗`
+      : article.provenanceLabel ? `Copy at ${article.provenanceLabel} ↗` : "Original article ↗";
   elements.originalSourceLink.hidden = !article.originalSourceUrl;
   elements.originalSourceLink.href = article.originalSourceUrl || "#";
   elements.originalSourceLink.textContent = "Original page ↗";
   elements.nowTitle.textContent = article.title;
   elements.outlineLabel.textContent = article.kind === "book" ? "Chapters" : "In this article";
   elements.endLabel.textContent = article.kind === "book" ? "End of the book." : "That’s the clean version.";
-  elements.readingNoteText.textContent = article.kind === "book"
-    ? "Footnotes, endnotes, navigation, and decorative matter have been left out of narration."
-    : article.source === "local"
-      ? "Selectable text was extracted from this PDF on your device. Citations, tables, and references have been left out where detected."
-    : "Footnotes, citation numbers, tables, and references have been removed from narration.";
+  elements.readingNoteText.textContent = article.format === "pdf"
+    ? "Selectable text was extracted from this PDF on your device. Citations, tables, and references have been left out where detected."
+    : article.kind === "book"
+      ? "Footnotes, endnotes, navigation, and decorative matter have been left out of narration."
+      : "Footnotes, citation numbers, tables, and references have been removed from narration.";
 
   const count = state.chunks.at(-1)?.startWord + state.chunks.at(-1)?.wordCount || 0;
   const minutes = Math.max(1, Math.round(count / (WORDS_PER_MINUTE * state.rate)));
@@ -3331,6 +3399,14 @@ $$('button[data-topic]', elements.catalogTopics).forEach((button) => {
   });
 });
 
+elements.collectionBrowse.addEventListener("click", () => {
+  setDiscoveryMode("books", { focus: false, refresh: false });
+  state.catalogQuery = "";
+  elements.catalogQuery.value = "";
+  chooseCatalogSource("collection");
+  elements.catalogTitle.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
 elements.loadMore.addEventListener("click", () => {
   state.catalogPage += 1;
   loadCatalog({ append: true });
@@ -3588,6 +3664,18 @@ async function resolveCurrentRoute({ historyMode = "none", routeState = history.
       description: "A carefully produced public-domain edition.",
       sourceUrl: `https://standardebooks.org/ebooks/${book}`,
     }, { historyMode });
+    return;
+  }
+  if (source === "collection" && /^[a-z0-9-]{1,80}$/.test(book || "")) {
+    const cached = await getCachedWork(`collection:${book}`).catch(() => null);
+    const item = await loadCollectionModule().then((collectionModule) => collectionModule.findCollectionBook(book), () => null);
+    // Offline, a book already prepared on this device still opens.
+    if (isCurrentCachedWork(cached, item)) activateWork(cached, { historyMode });
+    else if (item) await loadCatalogItem(item, { historyMode });
+    else {
+      showToast("That book isn’t in the collection.");
+      navigateToLibrary({ historyMode: "replace", scrollTop: false });
+    }
     return;
   }
   if (source === "gutenberg" && /^\d+$/.test(book || "")) {
