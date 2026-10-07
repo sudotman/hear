@@ -136,9 +136,9 @@ export async function findCollectionBook(bookId) {
   return findCollectionItem(await fetchCollection().catch(() => null), bookId);
 }
 
-export async function showCollectionShelf(renderBookCard) {
+export async function setUpCollection() {
   const collection = await fetchCollection();
-  if (collection.items.length) renderCollectionShelf(collection, renderBookCard);
+  if (collection.items.length) showCollectionSource(collection);
 }
 
 export function collectionStatus(collection, items, query) {
@@ -151,20 +151,16 @@ export function collectionStatus(collection, items, query) {
   return `${items.length} ${items.length === 1 ? "work" : "works"} from ${collection.title}${unavailable}`;
 }
 
-// Fills the collection shelf on the library page (the collection-* elements in
-// index.html), using Hear's own book cards.
-export function renderCollectionShelf(collection, renderBookCard) {
+// Adds the collection to the catalog's sources (the collection-* elements in
+// index.html). Its byline and shelf link show while that source is chosen.
+export function showCollectionSource(collection) {
   const byId = (id) => document.getElementById(id);
-  const count = collection.items.length;
   const deck = byId("collection-deck");
   const source = byId("collection-source");
   const footerLink = byId("footer-collection-link");
-  byId("collection-title").textContent = collection.title;
   byId("collection-eyebrow").textContent = collection.owner ? `Kept by ${collection.owner}` : "A personal library";
   deck.textContent = collection.description;
   deck.hidden = !collection.description;
-  byId("collection-count").textContent = String(count);
-  byId("collection-browse").setAttribute("aria-label", `Browse all ${count} works in ${collection.title}`);
   byId("collection-site-link").href = collection.siteUrl;
   footerLink.href = collection.siteUrl;
   footerLink.textContent = collection.title;
@@ -177,15 +173,6 @@ export function renderCollectionShelf(collection, renderBookCard) {
   const booksHint = `Searches ${collection.title}, Standard Ebooks, and Project Gutenberg.`;
   if (hint.textContent === hint.dataset.books) hint.textContent = booksHint;
   hint.dataset.books = booksHint;
-
-  const fragment = document.createDocumentFragment();
-  collection.items.slice(0, 12).forEach((item) => {
-    const card = renderBookCard(item);
-    card.setAttribute("role", "listitem");
-    fragment.append(card);
-  });
-  byId("collection-row").replaceChildren(fragment);
-  byId("collection-section").hidden = false;
 }
 
 export async function loadCollectionWork(item, onStatus = () => {}, {

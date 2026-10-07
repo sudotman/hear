@@ -21,7 +21,7 @@ catalog metadata comes from the public catalogs. standard ebooks uses its compat
 
 ## satyam's collection
 
-the home page shows a shelf read from `https://shelf.satyam.lol/catalog.json`, and its books also turn up in book searches. opening one downloads the epub or pdf into the browser and prepares it on the device, exactly like an import. any site serving the same `catalog.json` with cors can be hooked in instead: build with `VITE_COLLECTION_URL=https://example.com/catalog.json`, or `VITE_COLLECTION_URL=off` to remove the section. to try a local shelf, run `npm run dev` in the shelf repo and `VITE_COLLECTION_URL=http://localhost:4321/catalog.json npm run dev` here.
+the catalogue on the home page offers it as a source next to standard ebooks and gutenberg, read from `https://shelf.satyam.lol/catalog.json`, and its books also turn up in book searches. opening one downloads the epub or pdf into the browser and prepares it on the device, exactly like an import. any site serving the same `catalog.json` with cors can be hooked in instead: build with `VITE_COLLECTION_URL=https://example.com/catalog.json`, or `VITE_COLLECTION_URL=off` to remove the section. to try a local shelf, run `npm run dev` in the shelf repo and `VITE_COLLECTION_URL=http://localhost:4321/catalog.json npm run dev` here.
 
 ## voices
 

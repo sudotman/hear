@@ -76,7 +76,6 @@ const elements = {
   loadMore: $("#load-more"),
   continueListening: $("#continue-listening"),
   continueList: $("#continue-list"),
-  collectionBrowse: $("#collection-browse"),
   headerSearch: $("#header-search"),
   headerQuery: $("#header-query"),
   articleTitle: $("#article-title"),
@@ -918,12 +917,12 @@ function updateContinueListening() {
   });
 }
 
-// The owner's collection as a shelf on the library page. It stays hidden when
-// no collection is configured or its catalog cannot be reached.
-async function renderCollectionShelf() {
+// The owner's collection as one of the catalog's sources. It stays hidden
+// when no collection is configured or its catalog cannot be reached.
+async function setUpCollection() {
   if (!collectionCatalogUrl()) return;
   try {
-    await (await loadCollectionModule()).showCollectionShelf(renderBookCard);
+    await (await loadCollectionModule()).setUpCollection();
   } catch (error) {
     console.info("[Hear collection] unavailable", error.message);
   }
@@ -962,7 +961,7 @@ function showLibraryView({ scrollTop = true } = {}) {
   document.title = "Hear — the written world, spoken";
   if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
   updateContinueListening();
-  renderCollectionShelf();
+  setUpCollection();
   if (state.discoveryMode === "books" && !state.catalogItems.length && !state.catalogAbortController) loadCatalog();
 }
 
@@ -3399,14 +3398,6 @@ $$('button[data-topic]', elements.catalogTopics).forEach((button) => {
     });
     loadCatalog();
   });
-});
-
-elements.collectionBrowse.addEventListener("click", () => {
-  setDiscoveryMode("books", { focus: false, refresh: false });
-  state.catalogQuery = "";
-  elements.catalogQuery.value = "";
-  chooseCatalogSource("collection");
-  elements.catalogTitle.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 elements.loadMore.addEventListener("click", () => {

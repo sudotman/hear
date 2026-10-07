@@ -335,16 +335,18 @@ test("shows the personal collection and opens its books from a shareable link", 
   }));
 
   await page.goto("/");
-  const shelf = page.locator("#collection-section");
-  await expect(shelf.getByRole("heading", { name: "Satyam’s collection", level: 2 })).toBeVisible();
-  await expect(shelf.locator("#collection-eyebrow")).toHaveText("Kept by Satyam");
-  const card = shelf.getByRole("button", { name: "Open Pride and Prejudice by Jane Austen" });
-  await expect(card.locator("img")).toBeVisible();
+  // The collection is one of the catalogue's sources, not a shelf of its own.
+  await expect(page.locator("#collection-source")).toBeVisible();
   await expect(page.locator("#discovery-hint")).toContainText("Satyam’s collection");
+  await expect(page.locator("#collection-site-link")).toBeHidden();
 
-  await page.locator("#collection-browse").click();
+  await page.locator("#collection-source").click();
   await expect(page.locator("#collection-source")).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#catalog-title")).toHaveText("Satyam’s collection");
+  await expect(page.locator("#collection-eyebrow")).toHaveText("Kept by Satyam");
+  await expect(page.locator("#collection-site-link")).toBeVisible();
+  const card = page.locator("#book-grid").getByRole("button", { name: "Open Pride and Prejudice by Jane Austen" });
+  await expect(card.locator("img")).toBeVisible();
   await expect(page.locator("#catalog-status")).toContainText("2 works from Satyam’s collection");
   await expect(page.locator("#catalog-status")).toContainText("1 more can be read on the shelf");
 

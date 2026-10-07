@@ -885,9 +885,8 @@ body.library-open .header-search {
   background: var(--ink);
 }
 
-/* Shelves open with a full-width ink rule, like a section in a printed
-   catalogue. */
-.collection-section,
+/* The catalogue opens with a full-width ink rule, like a section in a
+   printed catalogue. */
 .catalog-section {
   width: min(100%, var(--content));
   margin: 0 auto;
@@ -898,11 +897,6 @@ body.library-open .header-search {
   padding-bottom: clamp(64px, 8vw, 112px);
 }
 
-.collection-section + .catalog-section {
-  padding-top: clamp(48px, 6vw, 80px);
-}
-
-.collection-heading,
 .catalog-heading {
   display: flex;
   padding-top: 16px;
@@ -913,7 +907,6 @@ body.library-open .header-search {
   border-top: 1px solid var(--ink);
 }
 
-.collection-heading h2,
 .catalog-heading h2 {
   font-family: var(--serif);
   font-size: clamp(26px, 2.4vw, 34px);
@@ -933,45 +926,14 @@ body.library-open .header-search {
   content: ". ";
 }
 
-.collection-actions {
-  display: flex;
-  gap: 4px 20px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.collection-actions .button {
-  min-height: 36px;
-  padding: 0 14px;
-  gap: 6px;
-}
-
-/* A single scrolling shelf; cards keep the catalogue grid's column width. */
-.collection-row {
-  display: grid;
-  margin: 24px calc(var(--gutter) * -1) 0;
-  padding: 4px var(--gutter) 12px;
-  grid-auto-flow: column;
-  grid-auto-columns: calc((100% - (var(--grid-cols) - 1) * var(--grid-gap)) / var(--grid-cols));
-  gap: var(--grid-gap);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scroll-padding-inline: var(--gutter);
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;
-}
-
-.collection-row::-webkit-scrollbar {
-  display: none;
-}
-
-.collection-row > .book-item {
-  scroll-snap-align: start;
-}
-
 /* Topics browse the public catalogs, so they step aside for the collection. */
 .catalog-controls:has(#collection-source[aria-pressed="true"]) #catalog-topics {
   visibility: hidden;
+}
+
+/* The collection's byline and shelf link show only while it is the source. */
+.catalog-section:not(:has(#collection-source[aria-pressed="true"])) :is(.catalog-heading .collection-deck, #collection-site-link) {
+  display: none;
 }
 
 .catalog-controls {
@@ -2991,18 +2953,8 @@ kbd {
     --grid-cols: 2;
   }
 
-  .collection-row {
-    grid-auto-columns: 40%;
-  }
-
-  .collection-heading,
   .catalog-heading {
     padding-top: 14px;
-  }
-
-  .collection-actions {
-    width: 100%;
-    justify-content: space-between;
   }
 
   .book-cover-title {
