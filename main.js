@@ -516,8 +516,8 @@ function renderBookCard(item, { removable = false } = {}) {
   coverTitle.textContent = item.title;
   const mark = document.createElement("span");
   mark.className = "book-cover-mark";
-  mark.textContent = item.title[0]?.toUpperCase() || "H";
-  cover.append(source, coverTitle, mark);
+  mark.textContent = item.author || "";
+  cover.append(coverTitle, mark);
 
   const title = document.createElement("h3");
   title.textContent = item.title;
@@ -525,7 +525,9 @@ function renderBookCard(item, { removable = false } = {}) {
   author.textContent = isArticle
     ? item.description || `${item.sourceLabel || "Web"} article`
     : item.author || "Unknown author";
-  button.append(cover, title, author);
+  // The library is named under the author, where it reads as attribution
+  // rather than a badge across the cover art.
+  button.append(cover, title, author, source);
 
   const progress = progressFor(item.key || item.id);
   if (progress?.totalWords) {
