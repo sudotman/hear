@@ -132,7 +132,7 @@ async function mockStandardBook(page) {
   }));
 }
 
-const COLLECTION_ORIGIN = "https://satyam.lol";
+const COLLECTION_ORIGIN = "https://shelf.satyam.lol";
 
 // The default collection (github.com/sudotman/shelf), served with CORS like
 // GitHub Pages so it loads under Hear's cross-origin isolation.
@@ -160,7 +160,7 @@ async function mockCollection(page) {
     subjects: [],
     listenable: true,
   };
-  await page.route(`${COLLECTION_ORIGIN}/shelf/catalog.json`, (route) => route.fulfill({
+  await page.route(`${COLLECTION_ORIGIN}/catalog.json`, (route) => route.fulfill({
     headers: cors,
     contentType: "application/json",
     body: JSON.stringify({
@@ -168,7 +168,7 @@ async function mockCollection(page) {
       title: "Satyam’s collection",
       owner: "Satyam",
       description: "Books worth keeping.",
-      url: `${COLLECTION_ORIGIN}/shelf/`,
+      url: `${COLLECTION_ORIGIN}/`,
       books: [
         book,
         // Short works (usually PDFs) are articles to the reader; same file, curated title.
@@ -177,12 +177,12 @@ async function mockCollection(page) {
       ],
     }),
   }));
-  await page.route(`${COLLECTION_ORIGIN}/shelf/files/pride-and-prejudice.epub`, (route) => route.fulfill({
+  await page.route(`${COLLECTION_ORIGIN}/files/pride-and-prejudice.epub`, (route) => route.fulfill({
     headers: cors,
     contentType: "application/epub+zip",
     body: standardEpubFixture(),
   }));
-  await page.route(`${COLLECTION_ORIGIN}/shelf/covers/pride.jpg`, (route) => route.fulfill({
+  await page.route(`${COLLECTION_ORIGIN}/covers/pride.jpg`, (route) => route.fulfill({
     headers: cors,
     contentType: "image/png",
     body: coverBytes,
@@ -363,8 +363,8 @@ test("shows the personal collection and opens its books from a shareable link", 
   await expect(page.getByRole("heading", { name: "Pride and Prejudice", level: 1 })).toBeVisible();
   await expect(page).toHaveURL(/\?source=collection&book=pride-and-prejudice$/);
   await expect(page.locator("#article-kicker")).toHaveText("Satyam’s collection · listening edition");
-  await expect(page.locator("#source-link")).toHaveAttribute("href", `${COLLECTION_ORIGIN}/shelf/#pride-and-prejudice`);
-  await expect(page.locator("#article-image")).toHaveAttribute("src", `${COLLECTION_ORIGIN}/shelf/covers/pride.jpg`);
+  await expect(page.locator("#source-link")).toHaveAttribute("href", `${COLLECTION_ORIGIN}/#pride-and-prejudice`);
+  await expect(page.locator("#article-image")).toHaveAttribute("src", `${COLLECTION_ORIGIN}/covers/pride.jpg`);
   await expect(page.locator("#article-copy")).not.toContainText("paragraph1");
   // Playwright's WebKit on Windows and Linux ships without Media Session.
   if (await page.evaluate(() => "mediaSession" in navigator)) {
